@@ -1,7 +1,14 @@
 {
-  "buildCommand": "cd apps/web && npm install && npm run build",
-  "outputDirectory": "apps/web/.next",
-  "installCommand": "cd apps/web && npm install",
-  "framework": "nextjs",
-  "rewrites": []
+  "builds": [
+    {
+      "src": "apps/web/package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "apps/web/$1"
+    }
+  ]
 }
