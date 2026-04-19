@@ -231,8 +231,8 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
         raise HTTPException(status_code=422, detail="Dataset must have at least 30 rows.")
 
     # Cap rows for serverless safety (Render free tier ~512 MB RAM)
-    if len(df) > 50_000:
-        df = df.sample(50_000, random_state=req.random_seed)
+    if len(df) > 2_000:
+        df = df.sample(2_000, random_state=req.random_seed)
 
     # ── Assign roles ──────────────────────────────────────────────────────
     roles = _assign_roles(df, req.column_roles, req.target)
