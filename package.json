@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "cd apps/web && npm run dev",
-    "build": "cd apps/web && npm run build",
+    "build": "cd apps/web && npm install && npm run build",
     "start": "cd apps/web && npm run start"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

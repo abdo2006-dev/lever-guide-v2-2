@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: lever-guide-api
+    runtime: python
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://lever-guide-v2.vercel.app
+      - key: PYTHON_VERSION
+        value: 3.12.0
+    healthCheckPath: /health
