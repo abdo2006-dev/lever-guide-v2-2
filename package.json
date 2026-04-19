@@ -1,0 +1,10 @@
+{
+  "name": "lever-guide",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd apps/web && npm run dev",
+    "build": "cd apps/web && npm run build",
+    "start": "cd apps/web && npm run start"
+  }
+}

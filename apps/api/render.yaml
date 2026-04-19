@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: lever-guide-api
+    runtime: python
+    region: frankfurt  # closest to EU users; change to oregon for US
+    plan: starter       # $7/mo — upgrade to standard for production
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://lever-guide.vercel.app
+      - key: PYTHON_VERSION
+        value: 3.12.0
+    healthCheckPath: /health
+    autoDeploy: true

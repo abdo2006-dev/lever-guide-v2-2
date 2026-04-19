@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS variables ──────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --background:  0 0% 100%;
+    --foreground:  222 47% 11%;
+    --card:        0 0% 98%;
+    --border:      220 13% 91%;
+    --muted:       210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent:      210 40% 94%;
+    --primary:     221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+  }
+
+  .dark {
+    --background:  222 47% 7%;
+    --foreground:  210 40% 96%;
+    --card:        222 47% 10%;
+    --border:      217 33% 18%;
+    --muted:       217 33% 14%;
+    --muted-foreground: 215 20% 55%;
+    --accent:      217 33% 16%;
+    --primary:     217 91% 60%;
+    --primary-foreground: 222 47% 7%;
+    --destructive: 0 63% 50%;
+  }
+
+  * { border-color: hsl(var(--border)); }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar         { width: 6px; height: 6px; }
+::-webkit-scrollbar-track   { background: transparent; }
+::-webkit-scrollbar-thumb   { background: hsl(var(--border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
