@@ -116,6 +116,21 @@ export default function SetupPage() {
     setAnalyzing(true);
     setAnalyzeError("");
 
+    // If csv_content was somehow lost from sessionStorage, re-fetch the demo
+    let csvContent = store.dataset.csv_content;
+    if (!csvContent || csvContent.trim().length === 0) {
+      try {
+        const { loadDemoDataset } = await import("@/lib/csv");
+        const fresh = await loadDemoDataset();
+        store.setDataset({ ...fresh, columns: store.dataset.columns });
+        csvContent = fresh.csv_content;
+      } catch {
+        setAnalyzeError("Dataset content is missing. Please reload the demo or re-upload your file.");
+        setAnalyzing(false);
+        return;
+      }
+    }
+
     const column_roles: Record<string, ColumnRole> = {};
     for (const col of store.dataset.columns) column_roles[col.name] = col.role;
 
@@ -125,7 +140,7 @@ export default function SetupPage() {
 
     try {
       const bundle = await runAnalysis({
-        dataset_csv: store.dataset.csv_content,
+        dataset_csv: csvContent,
         dataset_name: store.dataset.name,
         target: store.target,
         task: "regression",

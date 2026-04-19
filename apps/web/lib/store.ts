@@ -67,15 +67,14 @@ export const useAppStore = create<AppState>()(
           removeItem: () => {},
         }
       ),
-      // Don't persist the CSV content — it's large and slows storage
+      // Persist EVERYTHING including csv_content — sessionStorage handles ~5MB fine
+      // The analysis bundle is ~200KB, CSV is typically <2MB
       partialize: (s) => ({
         target: s.target,
         improveDirection: s.improveDirection,
         dagEdges: s.dagEdges,
         analysis: s.analysis,
-        dataset: s.dataset
-          ? { ...s.dataset, csv_content: "" }
-          : null,
+        dataset: s.dataset,   // ← full dataset including csv_content
       }),
     }
   )

@@ -423,3 +423,35 @@ Role assignments are applied automatically when loading the demo — they are do
 ---
 
 *LeverGuide is an analytical support tool. All recommendations should be validated with domain expertise and, for high-stakes decisions, with controlled experiments.*
+
+
+---
+
+## Changelog
+
+### v2.3 — Results page & state persistence (current)
+- **Analyze page fully rebuilt** — 5-tab dashboard: Overview, Predictive Models, Causal Analysis, Interventions, Executive Summary
+- **State now persisted** via `zustand/middleware persist` + `sessionStorage` — analysis survives page navigation
+- **CSV content preserved** in session — no more "empty dataset" errors on reload
+- **Auto-recovery** — if CSV content is lost from storage, the demo is automatically re-fetched before analysis
+- **Model comparison** visual bar chart with CV R² scores
+- **Intervention cards** — expandable, show current/suggested values, evidence type/strength, rationale, tradeoffs, assumptions
+- **Causal chart** — horizontal β bars coloured green (negative) / red (positive) / grey (not significant), full inference table
+
+### v2.2 — Single-service deployment
+- Switched to single Render service: Python FastAPI serves both the API and the Next.js static frontend
+- Next.js built with `output: "export"` (static HTML/JS/CSS)
+- FastAPI mounts `/_next`, `/demo`, and routes `/`, `/setup`, `/analyze` to the built HTML
+- Eliminated Vercel entirely — one URL, zero cross-service configuration
+
+### v2.1 — Setup UX & performance fixes
+- Dataset capped at 2,000 rows for Render free tier (prevents OOM / timeout)
+- Reduced model complexity: 150 estimators, 3-fold CV
+- Setup page rebuilt with 4-step stepper, live progress messages, elapsed timer, 90s client timeout
+
+### v2.0 — Initial production architecture
+- Split frontend (Next.js 15) + backend (FastAPI + scikit-learn/XGBoost/LightGBM/statsmodels)
+- Five-model comparison with held-out test set
+- DAG-aware back-door adjusted causal analysis via NetworkX + statsmodels
+- Intervention engine: GBR counterfactual simulation + causal direction overlay
+- 12 pytest tests covering DAG logic, preprocessing, model pipeline, and full HTTP endpoint
