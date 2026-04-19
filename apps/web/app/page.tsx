@@ -3,14 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import {
-  ArrowRight, BarChart3, Brain, GitBranch, Lightbulb,
-  ShieldCheck, Upload, Zap, TrendingDown,
-} from "lucide-react";
-import { toast } from "sonner";
+import { ArrowRight, BarChart3, Brain, GitBranch, Lightbulb, ShieldCheck, Upload, Zap, TrendingDown } from "lucide-react";
 import { useAppStore } from "@/lib/store";
-import { loadDemoDataset } from "@/lib/csv";
-import { DEMO_TARGET } from "@/lib/csv";
 
 export default function HomePage() {
   const router = useRouter();
@@ -20,12 +14,16 @@ export default function HomePage() {
   const handleDemo = async () => {
     setLoading(true);
     try {
+      // Lazy-import to avoid papaparse breaking Next.js static analysis
+      const { loadDemoDataset, DEMO_TARGET } = await import("@/lib/csv");
       const ds = await loadDemoDataset();
       setDataset(ds);
       setTarget(DEMO_TARGET);
+      const { toast } = await import("sonner");
       toast.success("Demo loaded — 5,000 injection-moulding rows ready.");
       router.push("/setup");
     } catch {
+      const { toast } = await import("sonner");
       toast.error("Failed to load demo dataset.");
     } finally {
       setLoading(false);
@@ -41,7 +39,9 @@ export default function HomePage() {
             <TrendingDown className="h-5 w-5 text-primary" /> LeverGuide
           </span>
           <div className="flex items-center gap-4 text-sm text-muted-foreground">
-            <Link href="/setup" className="hover:text-foreground transition-colors">Launch App</Link>
+            <Link href="/setup" className="hover:text-foreground transition-colors">
+              Launch App
+            </Link>
           </div>
         </div>
       </nav>
@@ -58,9 +58,8 @@ export default function HomePage() {
           </span>
         </h1>
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
-          Upload any tabular dataset, pick a KPI, and get ranked, explainable
-          recommendations — with predictive <em>and</em> causal evidence shown side by
-          side.
+          Upload any tabular dataset, pick a KPI, and get ranked, explainable recommendations —
+          with predictive <em>and</em> causal evidence shown side by side.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <button
@@ -100,18 +99,17 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Architecture callout */}
+      {/* Stack callout */}
       <section className="border-t border-border/40 py-16">
         <div className="container max-w-3xl mx-auto text-center">
           <h2 className="text-2xl font-bold mb-3">Serious ML under the hood</h2>
           <p className="text-muted-foreground text-sm leading-relaxed max-w-xl mx-auto">
-            The backend is a Python FastAPI service running scikit-learn, XGBoost, and
-            LightGBM. Models are compared on a held-out test set. Causal estimates use
-            back-door adjusted OLS via statsmodels — with honest p-values and confidence
-            intervals. The frontend is Next.js 15 deployed on Vercel.
+            Python FastAPI backend running scikit-learn, XGBoost, and LightGBM. Models compared
+            on a held-out test set. Causal estimates use back-door adjusted OLS via statsmodels
+            with honest p-values and confidence intervals.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
-            {TECH.map((t) => (
+            {["Next.js 15", "TypeScript", "FastAPI", "scikit-learn", "XGBoost", "LightGBM", "statsmodels", "Vercel", "Render"].map((t) => (
               <span key={t} className="rounded-full border border-border/60 px-3 py-1">{t}</span>
             ))}
           </div>
@@ -125,36 +123,31 @@ const FEATURES = [
   {
     icon: BarChart3,
     title: "Five-model comparison",
-    body: "OLS, Ridge, Random Forest, XGBoost, and LightGBM are all trained and evaluated on a held-out test set. Cross-validated R² is reported.",
+    body: "OLS, Ridge, Random Forest, XGBoost, and LightGBM trained on a held-out test set. Cross-validated R² reported.",
   },
   {
     icon: GitBranch,
     title: "DAG-aware causal analysis",
-    body: "Assign column roles (controllable / confounder / mediator) and draw a causal graph. The engine derives the back-door adjustment set and runs adjusted regression.",
+    body: "Assign column roles and draw a causal graph. The engine derives the back-door adjustment set and runs adjusted regression.",
   },
   {
     icon: Lightbulb,
     title: "Ranked intervention recommendations",
-    body: "Each recommendation shows direction, magnitude, evidence type (causal vs predictive), strength, tradeoffs, and explicit assumptions.",
+    body: "Each recommendation shows direction, magnitude, evidence type (causal vs predictive), strength, tradeoffs, and assumptions.",
   },
   {
     icon: Brain,
     title: "Executive summary mode",
-    body: "One-page plain-language summary for non-technical stakeholders. No jargon, no false precision — honest caveats included.",
+    body: "Plain-language summary for non-technical stakeholders. No jargon, no false precision — honest caveats included.",
   },
   {
     icon: ShieldCheck,
     title: "Honest uncertainty",
-    body: "Confidence intervals, p-values, and model quality metrics are always visible. Weak causal evidence is flagged, not suppressed.",
+    body: "Confidence intervals, p-values, and model quality metrics always visible. Weak causal evidence is flagged, not suppressed.",
   },
   {
     icon: Upload,
     title: "Bring your own data",
     body: "Upload any CSV up to 50,000 rows. Column types are auto-inferred. You control role assignments and the causal graph.",
   },
-];
-
-const TECH = [
-  "Next.js 15", "TypeScript", "FastAPI", "scikit-learn",
-  "XGBoost", "LightGBM", "statsmodels", "Vercel", "Render",
 ];
