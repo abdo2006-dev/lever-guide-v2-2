@@ -1,23 +1,18 @@
 import type { AnalysisBundle, AnalysisRequest } from "./types";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ??
-  (typeof window !== "undefined" ? "" : "http://localhost:8000");
+// Empty string = same-origin (works when FastAPI serves both frontend + API)
+// Set NEXT_PUBLIC_API_URL only if deploying frontend separately
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public detail?: unknown
-  ) {
+  constructor(public status: number, message: string, public detail?: unknown) {
     super(message);
     this.name = "ApiError";
   }
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const url = `${API_BASE}${path}`;
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -36,12 +31,6 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export async function runAnalysis(req: AnalysisRequest): Promise<AnalysisBundle> {
   return post<AnalysisBundle>("/api/analyze", req);
-}
-
-export async function checkHealth(): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new ApiError(res.status, "API unavailable");
-  return res.json();
 }
 
 export { ApiError };

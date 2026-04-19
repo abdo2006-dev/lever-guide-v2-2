@@ -1,5 +1,6 @@
 """
-LeverGuide API — FastAPI application entry point.
+LeverGuide — single-service deployment.
+FastAPI handles the ML/causal API and also serves the Next.js static frontend.
 """
 from __future__ import annotations
 import logging
@@ -8,10 +9,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.routers import analysis
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,41 +20,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Static files are built by the Dockerfile into /app/web/out
+STATIC_DIR = os.environ.get(
+    "STATIC_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "out"),
+)
+HAS_FRONTEND = os.path.isdir(STATIC_DIR)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("LeverGuide API starting up")
+    logger.info(f"LeverGuide API starting — frontend present: {HAS_FRONTEND}")
     yield
-    logger.info("LeverGuide API shutting down")
 
 
 app = FastAPI(
-    title="LeverGuide API",
-    description=(
-        "Decision-intelligence backend: ML pipeline + causal analysis + "
-        "intervention recommendations for tabular business data."
-    ),
+    title="LeverGuide",
     version="2.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
 )
-
-# ── CORS ──────────────────────────────────────────────────────────────────────
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:3000,https://lever-guide.vercel.app",
-).split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── API routes (must be registered BEFORE the static file catch-all) ─────────
 app.include_router(analysis.router, prefix="/api")
 
 
@@ -62,10 +58,34 @@ async def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "version": "2.0.0"})
 
 
-@app.get("/")
-async def root() -> JSONResponse:
-    return JSONResponse({
-        "name": "LeverGuide API",
-        "version": "2.0.0",
-        "docs": "/docs",
-    })
+# ── Frontend routes ───────────────────────────────────────────────────────────
+if HAS_FRONTEND:
+    # Serve _next assets (JS/CSS bundles)
+    next_assets = os.path.join(STATIC_DIR, "_next")
+    if os.path.isdir(next_assets):
+        app.mount("/_next", StaticFiles(directory=next_assets), name="next-assets")
+
+    # Serve demo CSV
+    demo_dir = os.path.join(STATIC_DIR, "demo")
+    if os.path.isdir(demo_dir):
+        app.mount("/demo", StaticFiles(directory=demo_dir), name="demo")
+
+    def _html(page: str) -> FileResponse:
+        path = os.path.join(STATIC_DIR, page, "index.html")
+        if os.path.exists(path):
+            return FileResponse(path)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+    @app.get("/setup")
+    @app.get("/setup/")
+    async def serve_setup() -> FileResponse:
+        return _html("setup")
+
+    @app.get("/analyze")
+    @app.get("/analyze/")
+    async def serve_analyze() -> FileResponse:
+        return _html("analyze")
+
+    @app.get("/")
+    async def serve_home() -> FileResponse:
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
