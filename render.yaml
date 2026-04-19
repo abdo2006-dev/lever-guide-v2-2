@@ -1,9 +1,12 @@
 services:
   - type: web
     name: lever-guide
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    runtime: python
+    buildCommand: pip install -r apps/api/requirements.txt && cd apps/web && npm install && npm run build
+    startCommand: cd apps/api && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
       - key: STATIC_DIR
-        value: /app/web/out
+        value: ../web/out
+    healthCheckPath: /health
