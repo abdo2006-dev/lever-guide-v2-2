@@ -24,6 +24,34 @@ logger = logging.getLogger(__name__)
 # so ../web/out resolves to apps/web/out (the Next.js static export)
 STATIC_DIR = os.environ.get("STATIC_DIR", "../web/out")
 HAS_FRONTEND = os.path.isdir(STATIC_DIR)
+LOCAL_DEV_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+
+
+def _allowed_origins() -> list[str]:
+    configured = [
+        origin.strip()
+        for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    env_name = os.environ.get("APP_ENV", os.environ.get("ENVIRONMENT", "development")).lower()
+
+    if "*" in configured:
+        if env_name in {"prod", "production"}:
+            logger.warning("Ignoring wildcard ALLOWED_ORIGINS in production mode.")
+            configured = [origin for origin in configured if origin != "*"]
+        else:
+            return ["*"]
+
+    origins = configured or LOCAL_DEV_ORIGINS
+    if env_name not in {"prod", "production"}:
+        origins = [*origins, *LOCAL_DEV_ORIGINS]
+
+    return sorted(set(origins))
 
 
 @asynccontextmanager
@@ -42,7 +70,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

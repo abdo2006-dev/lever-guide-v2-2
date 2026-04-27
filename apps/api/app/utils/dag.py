@@ -25,6 +25,22 @@ def validate_dag(
     warnings: list[str] = []
 
     G = build_dag(edges)
+    known = set(columns)
+
+    if target not in known:
+        errors.append(f"Target column '{target}' is not present in the dataset.")
+
+    for cause in controllable:
+        if cause not in known:
+            errors.append(f"Controllable column '{cause}' is not present in the dataset.")
+
+    # Unknown columns and malformed/self-loop edges
+    for i, e in enumerate(edges):
+        if e.source == e.target:
+            errors.append(f"DAG edge {i} is malformed: source and target are both '{e.source}'.")
+        for node in (e.source, e.target):
+            if node not in known:
+                errors.append(f"DAG references unknown column: '{node}'")
 
     # Cycle check
     try:
@@ -32,8 +48,8 @@ def validate_dag(
         if cycles:
             cycle_strs = [" → ".join(c + [c[0]]) for c in cycles[:3]]
             errors.append(f"DAG contains cycles: {'; '.join(cycle_strs)}")
-    except Exception:
-        pass
+    except Exception as exc:
+        errors.append(f"DAG could not be validated: {exc}")
 
     # Target must not be a source of other nodes (it's the outcome)
     if target in G:
@@ -43,25 +59,22 @@ def validate_dag(
                 f"Target '{target}' has outgoing edges — it should be a terminal node."
             )
 
-    # Unknown columns
-    known = set(columns)
-    for e in edges:
-        for node in (e.source, e.target):
-            if node not in known:
-                errors.append(f"DAG references unknown column: '{node}'")
-
     return DagValidationResult(
-        valid=len(errors) == 0,
+        valid=not errors,
         errors=errors,
         warnings=warnings,
     )
 
 
 def parents_of(node: str, G: nx.DiGraph) -> set[str]:
+    if not G.has_node(node):
+        return set()
     return set(G.predecessors(node))
 
 
 def ancestors_of(node: str, G: nx.DiGraph) -> set[str]:
+    if not G.has_node(node):
+        return set()
     try:
         return nx.ancestors(G, node)
     except Exception:
@@ -69,6 +82,8 @@ def ancestors_of(node: str, G: nx.DiGraph) -> set[str]:
 
 
 def descendants_of(node: str, G: nx.DiGraph) -> set[str]:
+    if not G.has_node(node):
+        return set()
     try:
         return nx.descendants(G, node)
     except Exception:
@@ -92,6 +107,9 @@ def adjustment_set(
       - Exclude: outcome itself
       - Exclude: cause itself
     """
+    if not G.has_node(cause):
+        return {c for c in [*confounders, *context] if c not in {cause, outcome, *mediators}}
+
     desc = descendants_of(cause, G)
     dag_parents = parents_of(cause, G)
 

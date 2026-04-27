@@ -10,7 +10,7 @@ export type ColumnRole =
   | "ignore";
 
 export type ColumnKind = "numeric" | "categorical" | "datetime" | "text";
-export type Task = "regression" | "classification" | "auto";
+export type Task = "regression";
 export type EvidenceStrength = "strong" | "moderate" | "weak" | "insufficient";
 export type EvidenceType = "causal" | "predictive" | "mixed";
 
@@ -209,6 +209,32 @@ export interface AnalysisBundle {
   dag_validation: DagValidationResult;
   warnings: string[];
   runtime_seconds: number;
+}
+
+// ── Copilot / RAG ─────────────────────────────────────────────────────────────
+
+export interface CopilotAskRequest {
+  analysis_id: string;
+  question: string;
+  max_citations?: number;
+}
+
+export interface CopilotCitation {
+  artifact_id: string;
+  title: string;
+  kind: "dataset" | "summary" | "dag" | "model" | "causal" | "intervention" | "eda";
+  snippet: string;
+  score: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface CopilotAnswerResponse {
+  answer: string;
+  citations: CopilotCitation[];
+  retrieved_artifact_ids: string[];
+  model?: string;
+  used_llm: boolean;
+  warnings: string[];
 }
 
 // ── Local state (no server) ───────────────────────────────────────────────────

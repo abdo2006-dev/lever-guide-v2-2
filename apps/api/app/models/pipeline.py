@@ -8,11 +8,19 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
 import statsmodels.api as sm
-import xgboost as xgb
-import lightgbm as lgb
 from app.schemas import (
     PredictiveResult, ModelMetrics, FeatureImportance, PredictionPoint, Coefficient
 )
+
+try:
+    import xgboost as xgb
+except Exception:
+    xgb = None  # type: ignore[assignment]
+
+try:
+    import lightgbm as lgb
+except Exception:
+    lgb = None  # type: ignore[assignment]
 
 
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray, n_features: int) -> dict:
@@ -119,6 +127,8 @@ def run_predictive_pipeline(
 
     # ── XGBoost ───────────────────────────────────────────────────────────────
     try:
+        if xgb is None:
+            raise RuntimeError("xgboost is unavailable")
         xgb_m = xgb.XGBRegressor(n_estimators=150, learning_rate=0.08, max_depth=4,
                                    subsample=0.8, colsample_bytree=0.8, min_child_weight=15,
                                    random_state=random_seed, verbosity=0, n_jobs=1)
@@ -137,6 +147,8 @@ def run_predictive_pipeline(
 
     # ── LightGBM ──────────────────────────────────────────────────────────────
     try:
+        if lgb is None:
+            raise RuntimeError("lightgbm is unavailable")
         lgbm_m = lgb.LGBMRegressor(n_estimators=150, learning_rate=0.08, max_depth=4,
                                     num_leaves=20, min_child_samples=20,
                                     subsample=0.8, colsample_bytree=0.8,

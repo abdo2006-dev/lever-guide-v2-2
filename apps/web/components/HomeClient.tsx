@@ -15,7 +15,7 @@ const FEATURES = [
   {
     icon: GitBranch,
     title: "DAG-aware causal analysis",
-    body: "Assign column roles and draw a causal graph. The engine derives the back-door adjustment set.",
+    body: "Assign column roles and optionally submit DAG edges through the API. The engine validates the graph before causal analysis.",
   },
   {
     icon: Lightbulb,
@@ -35,7 +35,7 @@ const FEATURES = [
   {
     icon: Upload,
     title: "Bring your own data",
-    body: "Upload any CSV up to 50,000 rows. Column types are auto-inferred.",
+    body: "Upload CSV files up to 50 MB. Large datasets are sampled to 2,000 rows for analysis.",
   },
 ];
 

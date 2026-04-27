@@ -42,7 +42,7 @@ export function PredictiveTab({ results }: { results: PredictiveResult[] }) {
           { label: "Adj. R²", val: model.metrics.adj_r2?.toFixed(4) ?? "—" },
           { label: "RMSE", val: model.metrics.rmse.toFixed(4) },
           { label: "MAE", val: model.metrics.mae.toFixed(4) },
-          { label: "CV R² (5-fold)", val: model.metrics.cv_r2_mean !== undefined
+          { label: "CV R² (3-fold)", val: model.metrics.cv_r2_mean !== undefined
             ? `${model.metrics.cv_r2_mean.toFixed(3)} ±${model.metrics.cv_r2_std?.toFixed(3)}`
             : "—" },
         ].map(({ label, val }) => (

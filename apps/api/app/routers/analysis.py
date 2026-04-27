@@ -18,13 +18,14 @@ from scipy import stats as scipy_stats
 from app.schemas import (
     AnalysisBundle, AnalysisRequest, CorrelationPair,
     DistributionBucket, FeatureDistribution, ExecutiveSummary,
-    TopValue,
+    TopValue, CopilotAskRequest, CopilotAnswerResponse,
 )
 from app.utils.preprocess import build_feature_matrix, build_column_meta, infer_column_kind
-from app.utils.dag import auto_dag, validate_dag, build_dag
+from app.utils.dag import auto_dag, validate_dag
 from app.models.pipeline import run_predictive_pipeline
 from app.models.causal import run_causal_analysis
 from app.models.intervention import run_intervention_engine
+from app.rag import answer_with_groq, index_analysis_session, retrieve
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -91,6 +92,28 @@ def _assign_roles(df: pd.DataFrame, column_roles: dict[str, str], target: str) -
             else:
                 roles[col] = "confounder"
     return roles
+
+
+def _coerce_and_validate_target(df: pd.DataFrame, target: str) -> pd.Series:
+    target_numeric = pd.to_numeric(df[target], errors="coerce")
+    non_null = target_numeric.dropna()
+    if len(non_null) < 30:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Target column '{target}' must contain at least 30 numeric, non-missing rows "
+                "for regression analysis."
+            ),
+        )
+    if non_null.nunique() < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Target column '{target}' must vary across rows. "
+                "Constant targets are not valid for regression analysis."
+            ),
+        )
+    return target_numeric
 
 
 def _compute_correlations(df: pd.DataFrame, cols: list[str]) -> list[CorrelationPair]:
@@ -234,6 +257,8 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     if len(df) > 2_000:
         df = df.sample(2_000, random_state=req.random_seed)
 
+    df[req.target] = _coerce_and_validate_target(df, req.target)
+
     # ── Assign roles ──────────────────────────────────────────────────────
     roles = _assign_roles(df, req.column_roles, req.target)
 
@@ -260,6 +285,17 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     dag_validation = validate_dag(
         dag_edges, list(df.columns), req.target, controllable
     )
+    if not dag_validation.valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_DAG",
+                "message": "The submitted DAG is invalid. Fix the graph and retry.",
+                "errors": dag_validation.errors,
+                "warnings": dag_validation.warnings,
+            },
+        )
+    warnings.extend(dag_validation.warnings)
 
     # ── Predictive pipeline ───────────────────────────────────────────────
     pred_features = [
@@ -322,7 +358,7 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     runtime = round(time.time() - start, 2)
     logger.info(f"[{request_id}] Done in {runtime}s — best model {best.model} R²={best.metrics.r2:.3f}")
 
-    return AnalysisBundle(
+    bundle = AnalysisBundle(
         request_id=request_id,
         dataset_name=req.dataset_name,
         target=req.target,
@@ -340,4 +376,61 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
         dag_validation=dag_validation,
         warnings=warnings,
         runtime_seconds=runtime,
+    )
+
+    try:
+        index_analysis_session(bundle, df, roles)
+    except Exception as exc:
+        logger.warning(f"[{request_id}] Copilot index build failed: {exc}")
+        bundle.warnings.append("Copilot index could not be built for this analysis.")
+
+    return bundle
+
+
+@router.post("/copilot/ask", response_model=CopilotAnswerResponse)
+async def ask_copilot(req: CopilotAskRequest) -> CopilotAnswerResponse:
+    try:
+        citations = retrieve(req.analysis_id, req.question, top_k=req.max_citations)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "ANALYSIS_NOT_INDEXED",
+                "message": (
+                    "No copilot index exists for this analysis session. "
+                    "Re-run the analysis and ask again."
+                ),
+            },
+        )
+
+    try:
+        answer, model, used_llm = await answer_with_groq(req.question, citations)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Copilot generation failed")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "COPILOT_GENERATION_FAILED",
+                "message": f"Copilot generation failed: {exc}",
+            },
+        )
+
+    artifact_ids = []
+    for citation in citations:
+        if citation.artifact_id not in artifact_ids:
+            artifact_ids.append(citation.artifact_id)
+
+    warnings = []
+    if not used_llm:
+        warnings.append("LLM generation was not used; response is based on retrieval status only.")
+
+    return CopilotAnswerResponse(
+        answer=answer,
+        citations=citations,
+        retrieved_artifact_ids=artifact_ids,
+        model=model,
+        used_llm=used_llm,
+        warnings=warnings,
     )

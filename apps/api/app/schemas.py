@@ -15,7 +15,7 @@ ColumnRole = Literal[
     "mediator", "context", "identifier", "ignore"
 ]
 ColumnKind = Literal["numeric", "categorical", "datetime", "text"]
-Task = Literal["regression", "classification", "auto"]
+Task = Literal["regression"]
 
 
 class TopValue(BaseModel):
@@ -51,6 +51,13 @@ class DatasetSummary(BaseModel):
 class DagEdge(BaseModel):
     source: str
     target: str
+
+    @field_validator("source", "target")
+    @classmethod
+    def node_nonempty(cls, v: str) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("DAG edge source and target must be non-empty strings")
+        return v.strip()
 
 
 class DagValidationResult(BaseModel):
@@ -224,3 +231,29 @@ class AnalysisBundle(BaseModel):
     dag_validation: DagValidationResult
     warnings: list[str] = Field(default_factory=list)
     runtime_seconds: float = 0.0
+
+
+# ── Copilot / RAG ─────────────────────────────────────────────────────────────
+
+class CopilotAskRequest(BaseModel):
+    analysis_id: str
+    question: str = Field(min_length=2, max_length=1000)
+    max_citations: int = Field(default=5, ge=1, le=8)
+
+
+class CopilotCitation(BaseModel):
+    artifact_id: str
+    title: str
+    kind: Literal["dataset", "summary", "dag", "model", "causal", "intervention", "eda"]
+    snippet: str
+    score: float
+    metadata: dict = Field(default_factory=dict)
+
+
+class CopilotAnswerResponse(BaseModel):
+    answer: str
+    citations: list[CopilotCitation]
+    retrieved_artifact_ids: list[str]
+    model: Optional[str] = None
+    used_llm: bool = False
+    warnings: list[str] = Field(default_factory=list)

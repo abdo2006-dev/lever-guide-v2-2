@@ -1,457 +1,264 @@
 # LeverGuide v2
 
-**Decision intelligence for tabular data.** Upload a dataset, select a KPI, define your causal graph, and get ranked, explainable recommendations — with predictive *and* causal evidence shown side by side.
+Decision intelligence for tabular regression problems. Upload a CSV, choose a numeric KPI, assign column roles, run predictive models and DAG-aware causal analysis, then review intervention recommendations and an executive summary.
 
----
+## What Works Today
 
-## Overview
-
-Most analytics tools answer "what predicts my KPI?"  
-LeverGuide answers "what should I *change*, and by how much?"
-
-It does this by combining:
-
-1. **Predictive modelling** — five models (OLS, Ridge, Random Forest, XGBoost, LightGBM) trained and compared on a held-out test set. The best model is selected by test-set R².
-2. **DAG-aware causal analysis** — you assign column roles (controllable / confounder / mediator / context) and optionally draw a causal graph. The engine derives the back-door adjustment set and estimates adjusted OLS coefficients via statsmodels with proper standard errors and confidence intervals.
-3. **Intervention recommendations** — for each controllable variable, a counterfactual simulation estimates the expected KPI change from a targeted shift, annotated with evidence type, strength, tradeoffs, assumptions, and an honest caveat.
-
----
-
-## Problem Statement
-
-Business analysts routinely face this situation: they have a dataset, a KPI they want to improve, and a set of variables they can actually change. Standard ML tells them what correlates — not what to do. Causal inference tools are often inaccessible without a PhD. LeverGuide bridges this gap for teams that need actionable, explainable decisions from tabular data.
-
----
-
-## Product Capabilities
-
-| Feature | Detail |
+| Capability | Current implementation |
 |---|---|
-| Upload any CSV | Up to 50,000 rows, numeric + categorical columns |
-| Demo dataset | Injection-moulding plant data — 5,000 rows, 32 columns |
-| Column roles | outcome / controllable / confounder / mediator / context / identifier / ignore |
-| Five-model comparison | OLS · Ridge · Random Forest · XGBoost · LightGBM |
-| Cross-validation | 5-fold CV R² reported where n > 200 |
-| Causal adjustment | Back-door adjusted OLS via statsmodels, per-variable adjustment sets |
-| DAG editor | Drag-and-drop causal graph with cycle detection and validation |
-| Interventions | Ranked recommendations with direction, magnitude, evidence type, tradeoffs |
-| EDA | Histograms and categorical distributions for all model features |
-| Executive summary | Plain-language summary with honest caveats for non-technical stakeholders |
-| Dark / light mode | System-aware theme, switchable |
-
----
+| CSV upload | Frontend accepts `.csv` files up to 50 MB. |
+| Demo dataset | Injection-moulding demo with 5,000 rows and 32 columns. Backend samples to 2,000 rows for analysis. |
+| Task type | Regression only. Classification is not exposed in schemas, UI, or docs. |
+| Column roles | `outcome`, `controllable`, `confounder`, `mediator`, `context`, `identifier`, `ignore`. |
+| Predictive models | OLS, Ridge, Random Forest, XGBoost, and LightGBM regressors. If a native boosted-tree library is unavailable in local dev, that model is skipped without taking down the API. |
+| Cross-validation | 3-fold CV R² for OLS/Ridge/RF when enabled and enough rows are available. XGBoost and LightGBM report held-out metrics only. |
+| Causal analysis | Back-door adjusted OLS for numeric controllable variables. |
+| DAG handling | API accepts optional DAG edges, validates them, and rejects invalid DAGs before causal analysis. There is no visual DAG editor in the frontend yet. |
+| Interventions | Numeric controllable recommendations from a GradientBoostingRegressor counterfactual simulation, annotated with causal evidence when available. |
+| Executive summary | Generated from model, causal, and intervention outputs. |
+| Analysis Copilot | Optional RAG assistant at `POST /api/copilot/ask`, grounded in indexed analysis artifacts and powered by Groq when configured. |
 
 ## Architecture
 
-LeverGuide v2 uses a **split deployment architecture**:
-
 ```
-┌─────────────────────────────────────────────────┐
-│  Vercel (Next.js 15 App Router)                  │
-│                                                   │
-│  app/page.tsx        → Landing page               │
-│  app/setup/page.tsx  → Upload + column roles      │
-│  app/analyze/page.tsx→ Results dashboard          │
-│                                                   │
-│  lib/csv.ts          → Client-side CSV parsing    │
-│  lib/store.ts        → Zustand state              │
-│  lib/api-client.ts   → Typed fetch wrapper        │
-└───────────────────────┬─────────────────────────┘
-                        │ HTTPS POST /api/analyze
-                        ▼
-┌─────────────────────────────────────────────────┐
-│  Render (Python 3.12 + FastAPI + Uvicorn)         │
-│                                                   │
-│  app/routers/analysis.py  → Main endpoint         │
-│  app/models/pipeline.py   → 5-model ML pipeline   │
-│  app/models/causal.py     → DAG-adjusted OLS      │
-│  app/models/intervention.py → Counterfactual sim  │
-│  app/utils/preprocess.py  → sklearn transformers  │
-│  app/utils/dag.py         → NetworkX DAG ops      │
-│  app/schemas.py           → Pydantic v2 schemas   │
-└─────────────────────────────────────────────────┘
+apps/web
+  Next.js static frontend
+  setup page: upload CSV, select target, assign roles, run analysis
+  analyze page: result tabs and Analysis Copilot panel
+  lib/api-client.ts: typed fetch wrapper with AbortSignal support
+
+apps/api
+  FastAPI backend
+  app/routers/analysis.py: POST /api/analyze and POST /api/copilot/ask
+  app/models/pipeline.py: regression model comparison
+  app/models/causal.py: adjusted OLS causal estimates
+  app/models/intervention.py: counterfactual recommendation engine
+  app/rag.py: artifact corpus, lightweight vector retrieval, Groq generation
+  app/utils/dag.py: DAG validation and adjustment-set helpers
 ```
 
-### Why split?
+The root `render.yaml` builds the Next static export and serves it from FastAPI as one Render service. `apps/api/render.yaml` is available for an API-only deployment.
 
-Heavy ML (Random Forest 200 trees, XGBoost, LightGBM, statsmodels OLS) does not belong in a serverless function. Vercel's serverless timeout (10–60 s) and 50 MB bundle limit make this impractical. A persistent Python microservice on Render handles all computation; Next.js handles the UI and is deployed to Vercel.
+## Backend Behavior
 
----
+### Analysis Flow
 
-## Tech Stack
+`POST /api/analyze` runs:
 
-### Frontend (`apps/web`)
-- **Next.js 15** — App Router, React Server Components
-- **TypeScript 5** — strict typing throughout
-- **Tailwind CSS 3** — utility-first styling
-- **Zustand 5** — client state (dataset + analysis bundle)
-- **Recharts 2** — scatter plots, bar charts
-- **Sonner** — toast notifications
-- **PapaParse** — client-side CSV parsing
+1. Parse CSV with pandas.
+2. Validate target and minimum row count (`>= 30` rows). The target must coerce to a numeric regression target with at least 30 non-missing numeric values and more than one distinct value.
+3. Sample datasets larger than 2,000 rows with `random_seed`.
+4. Assign roles from the request.
+5. Build or accept DAG edges.
+6. Validate the DAG and stop with `422 INVALID_DAG` if it is cyclic, malformed, or references unknown columns.
+7. Build the feature matrix.
+8. Train regression models.
+9. Run causal analysis.
+10. Generate interventions, EDA summaries, executive summary, and a Copilot retrieval index.
 
-### Backend (`apps/api`)
-- **FastAPI 0.115** — async HTTP API
-- **Pydantic v2** — schema validation, serialisation
-- **scikit-learn 1.6** — preprocessing pipelines, Random Forest, Ridge, CV
-- **XGBoost 2.1** — gradient boosted trees
-- **LightGBM 4.5** — gradient boosted trees
-- **statsmodels 0.14** — OLS regression with inference (SE, CI, p-values)
-- **NetworkX 3.4** — DAG operations (cycle detection, ancestor/descendant sets)
-- **Pandas 2.2 / NumPy 1.26** — data manipulation
+### Predictive Models
 
----
+All models use the same train/test split. The test fraction is between 10% and 20%, depending on dataset size.
 
-## Modelling Approach
-
-### Preprocessing
-
-For every analysis run the backend builds a sklearn `ColumnTransformer`:
-
-- **Numeric features**: `SimpleImputer(strategy="median")` → `StandardScaler()`
-- **Categorical features** (≤30 unique values): `SimpleImputer(strategy="most_frequent")` → `OrdinalEncoder()`
-- High-cardinality text columns are silently dropped
-- Rows where the target is missing are removed
-
-### Model training
-
-All five models receive the same training set (80% of data, stratified by default). Evaluation is on the held-out 20% test set. 5-fold cross-validation is run on the full dataset when `n > 200`. The winner is selected by test-set R².
-
-| Model | Key hyperparameters | Notes |
-|---|---|---|
-| OLS | λ=1e-6 ridge regularisation | Via statsmodels; provides coefficients + SEs |
-| Ridge | α=1.0 | Via scikit-learn |
-| Random Forest | 200 trees, max_depth=8, min_samples_leaf=10 | Prevents overfitting |
-| XGBoost | 300 rounds, lr=0.05, max_depth=4, min_child_weight=10 | Early stop on test set |
-| LightGBM | 300 rounds, lr=0.05, num_leaves=31, min_child_samples=20 | Fast, low memory |
-
----
-
-## Causal Inference Approach
-
-### What we do
-
-For each `controllable` variable we estimate its causal effect on the target using **back-door adjustment**:
-
-```
-y ~ feature + confounders + DAG_parents(feature) + context_variables
-```
-
-The adjustment set is derived from the user-specified DAG:
-- **Include**: declared confounders + DAG parents of the cause + context variables
-- **Exclude**: mediators (blocking the causal path would remove the effect we want to estimate)
-- **Exclude**: descendants of the cause (collider / post-treatment bias)
-
-OLS is fit on standardised features via statsmodels, giving:
-- Standardised β (effect per +1 SD of the cause on the target)
-- Standard error, t-statistic, p-value, 95% CI
-- Evidence strength classification (strong / moderate / weak / insufficient)
-
-### What we don't do
-
-- We do not claim to recover true causal effects from purely observational data
-- We do not implement IV estimation, difference-in-differences, or RCT analysis
-- We do not handle unobserved confounders
-
-All causal estimates should be treated as "adjusted correlations with a defensible adjustment set", not as proof of causation. The frontend makes this explicit at every point.
-
-### Role definitions
-
-| Role | Meaning | Used in adjustment? |
-|---|---|---|
-| `outcome` | The KPI / target variable | No |
-| `controllable` | Variables the operator can change | Yes — these are the "causes" we test |
-| `confounder` | Causes both the controllable and the outcome | Yes — always included |
-| `mediator` | On the causal path controllable→outcome | No — including would block the path |
-| `context` | Fixed design/run context | Yes — included to reduce residual variance |
-| `identifier` | Row ID / timestamp | No |
-| `ignore` | Excluded from analysis | No |
-
----
-
-## Intervention Logic
-
-The intervention engine combines two evidence sources:
-
-1. **Predictive (GBR counterfactual)**: A GradientBoostingRegressor is trained on all features. For each controllable variable, we simulate shifting it by ±1 SD while holding everything else at the mean, and compute the predicted KPI change. This is a "what-if" simulation — not causal.
-
-2. **Causal direction**: If back-door adjusted OLS produced a significant coefficient (p < 0.05), the sign is used to confirm or override the counterfactual direction.
-
-Each recommendation shows:
-
-| Field | Source |
+| Model | Current settings |
 |---|---|
-| Direction | Causal sign (if significant) else GBR |
-| Suggested value | Current mean ± 1 SD, clipped to observed range |
-| Estimated KPI change | GBR counterfactual simulation |
-| Evidence type | `causal` (sig. adj. OLS) / `mixed` / `predictive` |
-| Evidence strength | `strong` / `moderate` / `weak` |
-| Tradeoff | Domain-aware note |
-| Assumptions | Explicit list |
-| Caveat | "Validate with experiment" |
+| OLS | `statsmodels.OLS` with intercept. |
+| Ridge | `alpha=1.0`. |
+| Random Forest | `n_estimators=100`, `max_depth=6`, `min_samples_leaf=15`, `n_jobs=-1`. |
+| XGBoost | `n_estimators=150`, `learning_rate=0.08`, `max_depth=4`, `min_child_weight=15`, `subsample=0.8`, `colsample_bytree=0.8`, `n_jobs=1`. |
+| LightGBM | `n_estimators=150`, `learning_rate=0.08`, `max_depth=4`, `num_leaves=20`, `min_child_samples=20`, `subsample=0.8`, `colsample_bytree=0.8`, `n_jobs=1`. |
 
----
+Metrics are regression metrics: R², adjusted R² where applicable, RMSE, MAE, optional CV R², train rows, and test rows. The Dockerfile installs `libgomp1` for boosted-tree native runtime support; macOS local development may require `libomp` for XGBoost/LightGBM to run.
 
-## Reliability and Safeguards
+### Causal Analysis
 
-- **DAG cycle detection** — NetworkX `simple_cycles`; invalid DAGs are rejected with clear error messages
-- **Role validation** — mediators are never included in adjustment sets
-- **Small-sample warnings** — causal estimates with n < 100 are flagged
-- **Evidence typing** — every recommendation is labelled causal / mixed / predictive
-- **Schema validation** — Pydantic v2 validates every request and response
-- **File constraints** — CSV only, max 50 MB, min 30 rows
-- **Row cap** — datasets > 50,000 rows are randomly sampled (seed-reproducible)
-- **CORS** — only the declared frontend origin is allowed
+For each numeric controllable variable, the backend fits:
 
----
+```text
+target ~ controllable + confounders + DAG_parents(controllable) + context
+```
 
-## Limitations
+Mediators and descendants of the controllable are excluded from adjustment sets. Results are observational adjusted associations with standard errors, confidence intervals, p-values, evidence strength labels, and caveats. They are not proof of causality.
 
-1. **Observational data only** — all causal estimates may be biased by unobserved confounders.
-2. **Linear causal model** — adjusted OLS assumes linear relationships; non-linear effects will be missed.
-3. **No time-series structure** — temporal autocorrelation is ignored.
-4. **Categorical controllables** — the intervention engine currently targets numeric controllable features only.
-5. **No persistence** — analysis results are held in browser memory; refreshing loses them.
-6. **No authentication** — the API has no auth layer; add one before exposing to the public internet.
+### DAG Validation
 
----
+Invalid user DAGs never continue into adjustment-set logic. The API returns a structured 422 response:
+
+```json
+{
+  "detail": {
+    "code": "INVALID_DAG",
+    "message": "The submitted DAG is invalid. Fix the graph and retry.",
+    "errors": ["DAG contains cycles: A -> B -> A"],
+    "warnings": []
+  }
+}
+```
+
+The DAG utility helpers also return empty sets for missing graph nodes instead of surfacing raw NetworkX exceptions.
+
+## Optional Analysis Copilot
+
+The Copilot is a RAG explanation layer around completed analysis artifacts. It does not replace the regression, causal, or intervention engines.
+
+`POST /api/copilot/ask`
+
+```json
+{
+  "analysis_id": "request_id from /api/analyze",
+  "question": "Which levers should I focus on and why?",
+  "max_citations": 5
+}
+```
+
+Response:
+
+```json
+{
+  "answer": "...",
+  "citations": [
+    {
+      "artifact_id": "interventions",
+      "title": "Intervention Recommendations",
+      "kind": "intervention",
+      "snippet": "...",
+      "score": 0.42,
+      "metadata": { "target": "scrap_rate_pct" }
+    }
+  ],
+  "retrieved_artifact_ids": ["interventions"],
+  "model": "llama-3.3-70b-versatile",
+  "used_llm": true,
+  "warnings": []
+}
+```
+
+### RAG Design
+
+- Corpus: dataset schema/profile summary, inferred column types and roles, model metrics, causal findings, intervention recommendations, EDA correlations, DAG validation, and executive summary.
+- Retrieval: local per-session vector index using scikit-learn `HashingVectorizer` over chunked artifacts. This is lightweight, requires no vector database, and avoids sending raw dataframes to the LLM.
+- Generation: Groq OpenAI-compatible chat completions. Provider details are centralized in `app/rag.py` and configured by env.
+- Citations: every response returns retrieved snippets and artifact ids.
+- Storage: in-memory per FastAPI process with a TTL. Re-run the analysis after server restart or deploy.
+
+If `GROQ_API_KEY` is not set, retrieval still works and the route returns citations with a retrieval-only message.
+
+## RAG Before Fine-Tuning
+
+RAG grounds answers in project-specific artifacts from the current analysis session: metrics, recommendations, causal caveats, and dataset summaries. Fine-tuning would adapt behavior, style, or repeated task patterns, but it would not automatically know a user's newly uploaded dataset or generated results.
+
+For this app, RAG is the correct first step because users need grounded explanations of fresh analysis outputs. Future fine-tuning can be added later because prompt assembly, retrieval, and provider calls are already separated.
+
+## Environment Variables
+
+### Backend (`apps/api/.env`)
+
+```bash
+ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+APP_ENV=development
+STATIC_DIR=../web/out
+LOG_LEVEL=INFO
+
+# Optional Copilot generation
+GROQ_API_KEY=
+GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_API_BASE=https://api.groq.com/openai/v1
+GROQ_TIMEOUT_SECONDS=30
+
+# Optional RAG index tuning
+RAG_INDEX_TTL_SECONDS=21600
+RAG_VECTOR_SIZE=4096
+RAG_MAX_CONTEXT_CHARS=7000
+```
+
+CORS is environment driven. Local development origins are allowed by default in non-production mode. Wildcard CORS is ignored when `APP_ENV=production`.
+
+### Frontend (`apps/web/.env.local`)
+
+```bash
+# For local Next dev against local FastAPI:
+NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# For same-origin static export served by FastAPI, leave blank:
+# NEXT_PUBLIC_API_URL=
+```
 
 ## Local Development
 
-### Prerequisites
-
-- Node.js 20+
-- Python 3.12+
-- npm (or pnpm/bun)
-
-### 1. Clone and install
-
-```bash
-git clone https://github.com/your-org/lever-guide.git
-cd lever-guide
-
-# Frontend
-cd apps/web
-npm install
-
-# Backend
-cd ../api
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 2. Configure environment
-
-```bash
-# API
-cp apps/api/.env.example apps/api/.env
-# Edit ALLOWED_ORIGINS if needed
-
-# Web (no changes needed for local dev)
-cp apps/web/.env.example apps/web/.env.local
-```
-
-### 3. Run the backend
+### Backend
 
 ```bash
 cd apps/api
+python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
-# API docs at http://localhost:8000/docs
 ```
 
-### 4. Run the frontend
+API docs are at `http://localhost:8000/api/docs`.
+
+### Frontend
 
 ```bash
 cd apps/web
+npm install
+cp .env.example .env.local
+# set NEXT_PUBLIC_API_URL=http://localhost:8000 for local Next dev
 npm run dev
-# App at http://localhost:3000
 ```
 
-The Next.js dev server proxies `/api/*` to `http://localhost:8000` via `next.config.ts` rewrites — no CORS setup needed locally.
+Open `http://localhost:3000`.
 
-### 5. Run tests
+### Single-Service Static Build
 
 ```bash
-# Backend
+cd apps/web
+npm install
+npm run build
+
+cd ../api
+source .venv/bin/activate
+STATIC_DIR=../web/out uvicorn app.main:app --reload --port 8000
+```
+
+Open `http://localhost:8000`.
+
+## Tests
+
+Backend:
+
+```bash
 cd apps/api
 source .venv/bin/activate
 pytest tests/ -v
+```
 
-# Frontend type check
+Frontend type check:
+
+```bash
 cd apps/web
+npm install
 npm run type-check
 ```
 
----
+## Limitations
 
-## Deployment
+- Regression only.
+- No visual DAG editor in the frontend.
+- No authentication.
+- No persistent result storage; frontend state uses session storage and Copilot indexes are in backend memory.
+- No job queue or streaming progress; `/api/analyze` is synchronous.
+- Categorical controllable interventions are not implemented.
+- Causal estimates are observational and may be biased by unobserved confounders.
+- RAG retrieval uses lightweight local vectorization, not a managed vector database or neural embedding API.
 
-### Frontend → Vercel
+## Planned / Future Work
 
-1. Push the repo to GitHub.
-2. Import the repo in [vercel.com/new](https://vercel.com/new).
-3. Set **Root Directory** to `apps/web`.
-4. Add environment variable:
-   ```
-   NEXT_PUBLIC_API_URL = https://lever-guide-api.onrender.com
-   ```
-5. Deploy. Vercel auto-detects Next.js.
-
-### Backend → Render
-
-**Option A: render.yaml (recommended)**
-
-```bash
-# From repo root
-render deploy --yaml apps/api/render.yaml
-```
-
-Or connect your GitHub repo in the Render dashboard and point it to `apps/api`.
-
-Set the environment variable in Render dashboard:
-```
-ALLOWED_ORIGINS = https://lever-guide.vercel.app
-```
-
-**Option B: Docker**
-
-```bash
-cd apps/api
-docker build -t lever-guide-api .
-docker run -p 8000:8000 -e ALLOWED_ORIGINS=https://lever-guide.vercel.app lever-guide-api
-```
-
-**Render free tier note**: The free tier spins down after 15 minutes of inactivity. The first request after a cold start may take ~30 s. Upgrade to the Starter plan ($7/mo) to avoid this.
-
----
-
-## Repository Structure
-
-```
-lever-guide/
-├── apps/
-│   ├── web/                        # Next.js 15 frontend
-│   │   ├── app/
-│   │   │   ├── layout.tsx          # Root layout + theme provider
-│   │   │   ├── page.tsx            # Landing page
-│   │   │   ├── setup/page.tsx      # Upload + column role config
-│   │   │   └── analyze/page.tsx    # Results dashboard
-│   │   ├── components/
-│   │   │   └── analyze/
-│   │   │       ├── PredictiveTab.tsx
-│   │   │       ├── CausalTab.tsx
-│   │   │       ├── InterventionsTab.tsx
-│   │   │       └── ExecutiveTab.tsx
-│   │   ├── lib/
-│   │   │   ├── types.ts            # TypeScript types (mirrors Pydantic schemas)
-│   │   │   ├── api-client.ts       # Typed fetch wrapper
-│   │   │   ├── csv.ts              # Client-side CSV parsing + demo roles
-│   │   │   └── store.ts            # Zustand global state
-│   │   ├── public/demo/            # Injection-moulding demo CSV
-│   │   ├── next.config.ts
-│   │   ├── package.json
-│   │   └── .env.example
-│   │
-│   └── api/                        # Python FastAPI backend
-│       ├── app/
-│       │   ├── main.py             # FastAPI app + CORS
-│       │   ├── schemas.py          # Pydantic v2 schemas (source of truth)
-│       │   ├── routers/
-│       │   │   └── analysis.py     # POST /api/analyze — orchestrator
-│       │   ├── models/
-│       │   │   ├── pipeline.py     # OLS/Ridge/RF/XGB/LGBM training
-│       │   │   ├── causal.py       # Back-door adjusted OLS
-│       │   │   └── intervention.py # Counterfactual simulation + ranking
-│       │   └── utils/
-│       │       ├── preprocess.py   # sklearn ColumnTransformer builder
-│       │       └── dag.py          # NetworkX DAG ops + adjustment sets
-│       ├── tests/
-│       │   └── test_pipeline.py    # Unit + integration tests
-│       ├── requirements.txt
-│       ├── Dockerfile
-│       ├── render.yaml
-│       └── .env.example
-│
-└── README.md
-```
-
----
-
-## Demo Dataset
-
-The injection-moulding demo (`public/demo/injection_molding_demo.csv`) simulates a multi-plant plastics manufacturing operation with 5,000 rows and 32 columns.
-
-**Target**: `scrap_rate_pct` (minimise)
-
-**Controllable variables** (process knobs): `barrel_temperature_c`, `mold_temperature_c`, `injection_pressure_bar`, `hold_pressure_bar`, `screw_speed_rpm`, `cooling_time_s`, `clamp_force_kn`, `shot_size_g`
-
-**Confounders** (environmental): `ambient_temperature_c`, `ambient_humidity_pct`, `resin_moisture_pct`, `resin_batch_quality_index`, `dryer_dewpoint_c`
-
-**Mediators** (on causal path, do not adjust): `cycle_time_s`, `part_weight_g`
-
-**Context** (fixed per run): `cavity_count`, `product_variant`, `operator_experience_level`, `tool_wear_index`, `calibration_drift_index`
-
-Role assignments are applied automatically when loading the demo — they are documented in `apps/api/app/routers/analysis.py:DEMO_ROLES` and `apps/web/lib/csv.ts:DEMO_ROLES`.
-
----
-
-## Future Roadmap
-
-- [ ] Persistent result storage (PostgreSQL + job queue)
-- [ ] Streaming analysis progress via Server-Sent Events
-- [ ] Instrumental variable estimation for stronger causal claims
-- [ ] Classification mode (logistic regression + AUROC)
-- [ ] Categorical controllable interventions
-- [ ] Interactive DAG editor with ReactFlow
-- [ ] PDF export of the executive summary
-- [ ] Multi-user authentication (Clerk / NextAuth)
-- [ ] Dataset versioning and result history
-- [ ] SHAP values for model explainability
-
----
-
-## Honest Limitations and Known Gaps
-
-- **No authentication** — add before public deployment
-- **No persistent storage** — analysis results live in browser memory only
-- **Observational data bias** — causal estimates are adjusted but not guaranteed
-- **Linear causal assumption** — non-linear causal relationships are not captured by OLS
-- **Cold start latency** — Render free tier has ~30 s cold start; budget plan eliminates this
-- **No streaming** — the analysis endpoint is synchronous; large datasets may time out on slow connections
-
----
-
-*LeverGuide is an analytical support tool. All recommendations should be validated with domain expertise and, for high-stakes decisions, with controlled experiments.*
-
-
----
-
-## Changelog
-
-### v2.3 — Results page & state persistence (current)
-- **Analyze page fully rebuilt** — 5-tab dashboard: Overview, Predictive Models, Causal Analysis, Interventions, Executive Summary
-- **State now persisted** via `zustand/middleware persist` + `sessionStorage` — analysis survives page navigation
-- **CSV content preserved** in session — no more "empty dataset" errors on reload
-- **Auto-recovery** — if CSV content is lost from storage, the demo is automatically re-fetched before analysis
-- **Model comparison** visual bar chart with CV R² scores
-- **Intervention cards** — expandable, show current/suggested values, evidence type/strength, rationale, tradeoffs, assumptions
-- **Causal chart** — horizontal β bars coloured green (negative) / red (positive) / grey (not significant), full inference table
-
-### v2.2 — Single-service deployment
-- Switched to single Render service: Python FastAPI serves both the API and the Next.js static frontend
-- Next.js built with `output: "export"` (static HTML/JS/CSS)
-- FastAPI mounts `/_next`, `/demo`, and routes `/`, `/setup`, `/analyze` to the built HTML
-- Eliminated Vercel entirely — one URL, zero cross-service configuration
-
-### v2.1 — Setup UX & performance fixes
-- Dataset capped at 2,000 rows for Render free tier (prevents OOM / timeout)
-- Reduced model complexity: 150 estimators, 3-fold CV
-- Setup page rebuilt with 4-step stepper, live progress messages, elapsed timer, 90s client timeout
-
-### v2.0 — Initial production architecture
-- Split frontend (Next.js 15) + backend (FastAPI + scikit-learn/XGBoost/LightGBM/statsmodels)
-- Five-model comparison with held-out test set
-- DAG-aware back-door adjusted causal analysis via NetworkX + statsmodels
-- Intervention engine: GBR counterfactual simulation + causal direction overlay
-- 12 pytest tests covering DAG logic, preprocessing, model pipeline, and full HTTP endpoint
+- Persistent analysis storage and job history.
+- Background jobs and streaming progress.
+- Visual DAG editor.
+- Classification analysis with real classifiers, classification metrics, and matching UI.
+- Categorical controllable interventions.
+- Authentication and multi-user isolation.
+- PDF export.
+- Future fine-tuning support for preferred explanation style or repeated analyst workflows.

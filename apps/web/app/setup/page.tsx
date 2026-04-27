@@ -148,7 +148,7 @@ export default function SetupPage() {
         column_roles,
         dag_edges: store.dagEdges,
         random_seed: 42,
-      });
+      }, controller.signal);
       clearTimeout(timeout);
       store.setAnalysis(bundle);
       router.push("/analyze");
@@ -158,7 +158,11 @@ export default function SetupPage() {
       if (err instanceof Error && err.name === "AbortError") {
         msg = "Request timed out after 90s. The server may be under load — try again.";
       } else if (err instanceof ApiError) {
-        msg = `Server error: ${err.message}`;
+        const detail = err.detail as { detail?: { code?: string; errors?: string[] } } | undefined;
+        const validationErrors = detail?.detail?.errors;
+        msg = detail?.detail?.code === "INVALID_DAG" && validationErrors?.length
+          ? `Invalid causal graph: ${validationErrors.join(" ")}`
+          : `Server error: ${err.message}`;
       } else if (err instanceof Error) {
         msg = err.message;
       }

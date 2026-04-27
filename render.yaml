@@ -9,4 +9,10 @@ services:
         value: 3.12.0
       - key: STATIC_DIR
         value: ../web/out
+      - key: APP_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://lever-guide.onrender.com
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
     healthCheckPath: /health

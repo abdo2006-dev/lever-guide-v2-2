@@ -80,11 +80,13 @@ def build_feature_matrix(
     numeric_cols = [
         c for c in features
         if pd.api.types.is_numeric_dtype(df_feat[c])
+        and df_feat[c].notna().any()
     ]
     cat_cols = [
         c for c in features
         if not pd.api.types.is_numeric_dtype(df_feat[c])
         and df_feat[c].nunique() <= MAX_CARDINALITY
+        and df_feat[c].notna().any()
     ]
     # Drop high-cardinality text features silently
     used_cols = numeric_cols + cat_cols

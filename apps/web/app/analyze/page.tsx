@@ -9,9 +9,11 @@ import {
 import {
   ArrowLeft, BarChart3, GitBranch, Lightbulb, Brain,
   Star, AlertTriangle, CheckCircle2, ArrowUpRight, ArrowDownRight, Info,
+  Send, Loader2,
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
-import type { AnalysisBundle, PredictiveResult, CausalEffect, Intervention } from "@/lib/types";
+import { askCopilot, ApiError } from "@/lib/api-client";
+import type { AnalysisBundle, PredictiveResult, CausalEffect, Intervention, CopilotAnswerResponse } from "@/lib/types";
 
 /* ─── safe formatters — never crash on null/undefined ─────────────────── */
 const n = (v: unknown): number => (v == null || isNaN(Number(v)) ? 0 : Number(v));
@@ -37,6 +39,7 @@ const TABS = [
   { id: "causal",        label: "Causal Analysis" },
   { id: "interventions", label: "Interventions" },
   { id: "executive",     label: "Executive Summary" },
+  { id: "copilot",       label: "Copilot" },
 ];
 
 /* ═══════════════ PAGE ═══════════════════════════════════════════════════ */
@@ -107,6 +110,7 @@ export default function AnalyzePage() {
         {tab === "causal"        && <CausalTab      effects={analysis.causal} target={target} />}
         {tab === "interventions" && <InterventionsTab interventions={analysis.interventions} target={target} />}
         {tab === "executive"     && <ExecutiveTab   exec={analysis.executive} />}
+        {tab === "copilot"       && <CopilotTab     analysis={analysis} />}
       </div>
     </div>
   );
@@ -238,7 +242,7 @@ function PredictiveTab({ results }: { results: PredictiveResult[] }) {
       </div>
       <div className="text-xs text-muted-foreground rounded-lg border border-border/40 bg-card/50 p-3 leading-relaxed">
         <strong>How to read these metrics:</strong>{" "}
-        <strong>R²</strong> (coefficient of determination) — fraction of variance in {model.task === "regression" ? "the target" : "outcomes"} explained by the model.
+        <strong>R²</strong> (coefficient of determination) — fraction of variance in the target explained by the model.
         1.0 = perfect, 0 = no better than the mean.{" "}
         <strong>RMSE</strong> (root mean square error) — average prediction error in the same units as the target.{" "}
         <strong>Adj. R²</strong> penalises for extra features (OLS/Ridge only).{" "}
@@ -542,6 +546,114 @@ function ExecutiveTab({ exec }: { exec: AnalysisBundle["executive"] }) {
         <p className="text-xs text-muted-foreground leading-relaxed mt-2">{exec.methodology_note}</p>
         <p className="text-xs text-muted-foreground leading-relaxed mt-2 italic">{exec.disclaimer}</p>
       </Card>
+    </div>
+  );
+}
+
+/* ═══════════════ COPILOT ═══════════════════════════════════════════════ */
+function CopilotTab({ analysis }: { analysis: AnalysisBundle }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<CopilotAnswerResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    const q = question.trim();
+    if (!q || loading) return;
+    setLoading(true);
+    setError("");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const res = await askCopilot({
+        analysis_id: analysis.request_id,
+        question: q,
+        max_citations: 5,
+      }, controller.signal);
+      setAnswer(res);
+    } catch (err) {
+      let msg = "Copilot request failed.";
+      if (err instanceof Error && err.name === "AbortError") {
+        msg = "Copilot timed out after 45s. Try a narrower question.";
+      } else if (err instanceof ApiError) {
+        msg = err.message;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      setError(msg);
+    } finally {
+      clearTimeout(timeout);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 max-w-3xl mx-auto">
+      <div className="rounded-xl border border-border/60 bg-card p-5">
+        <div className="flex items-start gap-3">
+          <Brain className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-sm">Analysis Copilot</p>
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              Ask about this analysis. Answers are grounded in retrieved dataset, model, causal, intervention, and summary artifacts.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <input
+            value={question}
+            onChange={e => setQuestion(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") submit(); }}
+            placeholder="Ask about drivers, caveats, interventions, or model quality…"
+            className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+          <button
+            onClick={submit}
+            disabled={!question.trim() || loading}
+            className="h-10 w-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40"
+            aria-label="Ask copilot"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+      </div>
+
+      {answer && (
+        <div className="rounded-xl border border-border/60 bg-card p-5 space-y-4">
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <p className="font-semibold text-sm">Answer</p>
+              <span className="text-xs text-muted-foreground">
+                {answer.used_llm ? answer.model ?? "Groq" : "retrieval only"}
+              </span>
+            </div>
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{answer.answer}</p>
+            {answer.warnings.map((w, i) => (
+              <p key={i} className="text-xs text-yellow-400 mt-2">{w}</p>
+            ))}
+          </div>
+
+          <div>
+            <p className="font-semibold text-sm mb-2">Citations</p>
+            <div className="space-y-2">
+              {answer.citations.map((c, i) => (
+                <div key={`${c.artifact_id}-${i}`} className="rounded-lg border border-border/50 bg-muted/10 p-3">
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <span className="text-xs font-semibold">{c.title}</span>
+                    <span className="text-xs text-muted-foreground">{c.kind} · score {fmt(c.score, 2)}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{c.snippet}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

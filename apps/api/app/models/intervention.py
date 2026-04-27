@@ -58,6 +58,7 @@ def run_intervention_engine(
     numeric_sim_features = [
         f for f in feature_names
         if f in df.columns and pd.api.types.is_numeric_dtype(df[f])
+        and df[f].notna().any()
     ]
     if not numeric_sim_features:
         return []
