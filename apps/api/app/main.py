@@ -11,8 +11,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
 from app.routers import analysis
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
