@@ -26,6 +26,7 @@ from app.models.pipeline import run_predictive_pipeline
 from app.models.causal import run_causal_analysis
 from app.models.intervention import run_intervention_engine
 from app.rag import answer_with_groq, index_analysis_session, retrieve
+from app.utils.wandb_tracking import track_analysis_run
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -383,6 +384,22 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     except Exception as exc:
         logger.warning(f"[{request_id}] Copilot index build failed: {exc}")
         bundle.warnings.append("Copilot index could not be built for this analysis.")
+
+    wandb_warning = track_analysis_run(
+        request_id=request_id,
+        req=req,
+        df=df,
+        roles=roles,
+        predictive_results=predictive_results,
+        causal_effects=causal_effects,
+        interventions=interventions,
+        correlations=correlations,
+        executive=executive,
+        runtime_seconds=runtime,
+    )
+    if wandb_warning:
+        logger.warning(f"[{request_id}] {wandb_warning}")
+        bundle.warnings.append(wandb_warning)
 
     return bundle
 

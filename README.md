@@ -17,6 +17,7 @@ Decision intelligence for tabular regression problems. Upload a CSV, choose a nu
 | Interventions | Numeric controllable recommendations from a GradientBoostingRegressor counterfactual simulation, annotated with causal evidence when available. |
 | Executive summary | Generated from model, causal, and intervention outputs. |
 | Analysis Copilot | Optional RAG assistant at `POST /api/copilot/ask`, grounded in indexed analysis artifacts, stored in Qdrant, and powered by Groq when configured. |
+| Experiment tracking | Optional Weights & Biases tracking for dataset profile, model metrics, and analysis artifacts from each `/api/analyze` run. |
 
 ## Architecture
 
@@ -176,6 +177,12 @@ QDRANT_API_KEY=
 QDRANT_PATH=./.qdrant
 QDRANT_COLLECTION=analysis_copilot
 QDRANT_TIMEOUT_SECONDS=10
+
+# Optional Weights & Biases experiment tracking
+WANDB_ENABLED=false
+WANDB_PROJECT=leverguide-v2
+WANDB_ENTITY=
+WANDB_MODE=online
 ```
 
 CORS is environment driven. Local development origins are allowed by default in non-production mode. Wildcard CORS is ignored when `APP_ENV=production`.
@@ -240,6 +247,14 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
+Backend W&B tracking smoke test:
+
+```bash
+cd apps/api
+source .venv/bin/activate
+pytest tests/test_wandb_tracking.py -v
+```
+
 Frontend type check:
 
 ```bash
@@ -258,6 +273,42 @@ npm run type-check
 - Categorical controllable interventions are not implemented.
 - Causal estimates are observational and may be biased by unobserved confounders.
 - RAG retrieval uses hashed text vectors plus Qdrant storage, not a neural embedding API.
+
+## Setup Checklist (What You Need To Configure)
+
+- `.env` is required for backend behavior. At minimum set `APP_ENV`, local CORS, and Qdrant path if you want local persistent RAG storage.
+- Qdrant setup is already handled in code:
+  - Local persistence mode (default) works with just `QDRANT_PATH=./.qdrant`.
+  - Remote Qdrant is optional; only set `QDRANT_URL`/`QDRANT_API_KEY` when using a hosted cluster.
+- Groq is optional for generated Copilot answers:
+  - Without `GROQ_API_KEY`, retrieval and citations still work; text generation falls back to retrieval-only behavior.
+- W&B is optional and disabled by default:
+  - Set `WANDB_ENABLED=true` and provide `WANDB_PROJECT` (plus `WANDB_ENTITY` if needed).
+  - Use `WANDB_MODE=offline` to demo locally without uploading.
+
+## Show-Off Demo Flow (Screenshots for LinkedIn)
+
+1. Start backend and frontend:
+   ```bash
+   cd apps/api && source .venv/bin/activate && uvicorn app.main:app --reload --port 8000
+   cd apps/web && npm run dev
+   ```
+2. Open the app, load the demo dataset, assign roles, and run analysis.
+3. Capture screenshot #1 (RAG-ready analysis output):
+   - Analyze page with best model card + interventions + executive summary visible.
+4. Capture screenshot #2 (Qdrant-backed RAG):
+   - Ask Copilot a question like: "Which levers should I focus on and why?"
+   - Show answer plus citations panel.
+5. Capture screenshot #3 (W&B tracking):
+   - Enable W&B in `apps/api/.env` (`WANDB_ENABLED=true`).
+   - Re-run analysis.
+   - In W&B, capture:
+     - Run overview/config (dataset + target + runtime),
+     - model metrics table,
+     - artifacts (`dataset-<request_id>` and `analysis-<request_id>`).
+6. Optional verification screenshot for Qdrant persistence:
+   - Restart backend, then ask Copilot again for the same `analysis_id`.
+   - The indexed retrieval should still return citations when using persistent `QDRANT_PATH`.
 
 ## Planned / Future Work
 
