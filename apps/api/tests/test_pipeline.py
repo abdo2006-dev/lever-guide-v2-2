@@ -7,6 +7,20 @@ import pytest
 import pandas as pd
 import numpy as np
 
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("QDRANT_PATH", str(tmp_path / "qdrant"))
+    monkeypatch.setenv("QDRANT_URL", "")
+    monkeypatch.setenv("QDRANT_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    yield
+    try:
+        from app.rag import close_retrieval_store
+        close_retrieval_store()
+    except Exception:
+        pass
+
 # ── Unit: DAG utilities ───────────────────────────────────────────────────────
 
 def test_dag_cycle_detection():
@@ -397,10 +411,9 @@ def test_random_mixed_dataset_happy_path():
     assert data["predictive"]
 
 
-def test_copilot_retrieves_indexed_analysis_without_llm(demo_csv_content, monkeypatch):
+def test_copilot_retrieves_indexed_analysis_without_llm(demo_csv_content):
     from fastapi.testclient import TestClient
     from app.main import app
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     client = TestClient(app)
 
     analyze_resp = client.post("/api/analyze", json=_analysis_payload(demo_csv_content))
@@ -418,10 +431,31 @@ def test_copilot_retrieves_indexed_analysis_without_llm(demo_csv_content, monkey
     assert data["retrieved_artifact_ids"]
 
 
-def test_copilot_unknown_analysis_returns_404(monkeypatch):
+def test_copilot_qdrant_persists_after_client_restart(demo_csv_content):
     from fastapi.testclient import TestClient
     from app.main import app
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    from app.rag import close_retrieval_store
+
+    client = TestClient(app)
+    analyze_resp = client.post("/api/analyze", json=_analysis_payload(demo_csv_content))
+    assert analyze_resp.status_code == 200, analyze_resp.text
+    analysis_id = analyze_resp.json()["request_id"]
+
+    close_retrieval_store()
+
+    ask_resp = client.post("/api/copilot/ask", json={
+        "analysis_id": analysis_id,
+        "question": "What is the best model for this run?",
+    })
+    assert ask_resp.status_code == 200, ask_resp.text
+    data = ask_resp.json()
+    assert data["citations"]
+    assert data["used_llm"] is False
+
+
+def test_copilot_unknown_analysis_returns_404():
+    from fastapi.testclient import TestClient
+    from app.main import app
     client = TestClient(app)
     resp = client.post("/api/copilot/ask", json={
         "analysis_id": "missing",

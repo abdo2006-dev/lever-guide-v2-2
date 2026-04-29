@@ -46,3 +46,4 @@ build/
 .vercel/
 .env
 .env.*
+.qdrant/

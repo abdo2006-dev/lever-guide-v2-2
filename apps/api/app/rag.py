@@ -1,19 +1,22 @@
 """
-Lightweight retrieval layer for the optional Analysis Copilot.
+Qdrant-backed retrieval layer for the optional Analysis Copilot.
 
-Indexes compact analysis artifacts per request_id. It intentionally stores
-summaries and analysis outputs, not the raw dataframe.
+The corpus stores compact analysis artifacts per request_id. It intentionally
+indexes summaries and analysis outputs, not the raw dataframe.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import numpy as np
 import pandas as pd
+from qdrant_client import QdrantClient, models
 from sklearn.feature_extraction.text import HashingVectorizer
 
 from app.schemas import AnalysisBundle, CopilotCitation
@@ -39,17 +42,10 @@ class Chunk:
     metadata: dict[str, Any]
 
 
-@dataclass
-class SessionIndex:
-    analysis_id: str
-    chunks: list[Chunk]
-    matrix: Any
-    created_at: float
-
-
 VECTOR_SIZE = int(os.environ.get("RAG_VECTOR_SIZE", "4096"))
 MAX_CONTEXT_CHARS = int(os.environ.get("RAG_MAX_CONTEXT_CHARS", "7000"))
 INDEX_TTL_SECONDS = int(os.environ.get("RAG_INDEX_TTL_SECONDS", str(6 * 60 * 60)))
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "analysis_copilot")
 
 _vectorizer = HashingVectorizer(
     n_features=VECTOR_SIZE,
@@ -58,7 +54,8 @@ _vectorizer = HashingVectorizer(
     ngram_range=(1, 2),
     stop_words="english",
 )
-_indexes: dict[str, SessionIndex] = {}
+_qdrant_client: QdrantClient | None = None
+_qdrant_config: tuple[Any, ...] | None = None
 
 
 def _compact_float(value: Any, digits: int = 4) -> str:
@@ -232,47 +229,139 @@ def _chunk_artifact(artifact: Artifact, chunk_chars: int = 1200, overlap: int = 
     return chunks
 
 
+def _vectorize_texts(texts: list[str]) -> np.ndarray:
+    return _vectorizer.transform(texts).toarray().astype(np.float32)
+
+
+def _qdrant_runtime_config() -> tuple[Any, ...]:
+    return (
+        os.environ.get("QDRANT_URL", "").strip(),
+        os.environ.get("QDRANT_API_KEY", "").strip(),
+        os.environ.get("QDRANT_PATH", "./.qdrant").strip(),
+        os.environ.get("QDRANT_TIMEOUT_SECONDS", "10").strip(),
+        QDRANT_COLLECTION,
+    )
+
+
+def _ensure_collection(client: QdrantClient) -> None:
+    if client.collection_exists(QDRANT_COLLECTION):
+        return
+    client.create_collection(
+        collection_name=QDRANT_COLLECTION,
+        vectors_config=models.VectorParams(size=VECTOR_SIZE, distance=models.Distance.COSINE),
+    )
+
+
+def _get_qdrant_client() -> QdrantClient:
+    global _qdrant_client, _qdrant_config
+
+    config = _qdrant_runtime_config()
+    if _qdrant_client is not None and _qdrant_config == config:
+        return _qdrant_client
+
+    close_retrieval_store()
+
+    qdrant_url, qdrant_api_key, qdrant_path, timeout_raw, _ = config
+    timeout = int(timeout_raw)
+    if qdrant_url:
+        client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key or None,
+            timeout=timeout,
+        )
+    else:
+        resolved_path = os.path.abspath(qdrant_path)
+        os.makedirs(resolved_path, exist_ok=True)
+        client = QdrantClient(
+            path=resolved_path,
+            timeout=timeout,
+            force_disable_check_same_thread=True,
+        )
+
+    _ensure_collection(client)
+    _qdrant_client = client
+    _qdrant_config = config
+    return client
+
+
+def _analysis_filter(analysis_id: str) -> models.Filter:
+    return models.Filter(
+        must=[
+            models.FieldCondition(
+                key="analysis_id",
+                match=models.MatchValue(value=analysis_id),
+            )
+        ]
+    )
+
+
+def _point_id(analysis_id: str, chunk_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{analysis_id}:{chunk_id}"))
+
+
 def index_analysis_session(bundle: AnalysisBundle, df: pd.DataFrame, roles: dict[str, str]) -> None:
     _prune_old_indexes()
     artifacts = _build_artifacts(bundle, df, roles)
     chunks = [chunk for artifact in artifacts for chunk in _chunk_artifact(artifact)]
     if not chunks:
         return
-    matrix = _vectorizer.transform([chunk.text for chunk in chunks])
-    _indexes[bundle.request_id] = SessionIndex(
-        analysis_id=bundle.request_id,
-        chunks=chunks,
-        matrix=matrix,
-        created_at=time.time(),
+
+    client = _get_qdrant_client()
+    client.delete(
+        collection_name=QDRANT_COLLECTION,
+        points_selector=_analysis_filter(bundle.request_id),
+        wait=True,
     )
+
+    created_at = time.time()
+    vectors = _vectorize_texts([chunk.text for chunk in chunks])
+    points = [
+        models.PointStruct(
+            id=_point_id(bundle.request_id, chunk.chunk_id),
+            vector=vectors[idx].tolist(),
+            payload={
+                "analysis_id": bundle.request_id,
+                "artifact_id": chunk.artifact_id,
+                "chunk_id": chunk.chunk_id,
+                "title": chunk.title,
+                "kind": chunk.kind,
+                "text": chunk.text,
+                "created_at": created_at,
+                "metadata": chunk.metadata,
+            },
+        )
+        for idx, chunk in enumerate(chunks)
+    ]
+    client.upsert(collection_name=QDRANT_COLLECTION, points=points, wait=True)
 
 
 def retrieve(analysis_id: str, question: str, top_k: int = 5) -> list[CopilotCitation]:
-    index = _indexes.get(analysis_id)
-    if index is None:
-        raise KeyError(analysis_id)
     if not question.strip():
         return []
+    if not has_index(analysis_id):
+        raise KeyError(analysis_id)
 
-    query_vector = _vectorizer.transform([question])
-    scores = (index.matrix @ query_vector.T).toarray().ravel()
-    if len(scores) == 0:
-        return []
+    client = _get_qdrant_client()
+    query_vector = _vectorize_texts([question])[0].tolist()
+    response = client.query_points(
+        collection_name=QDRANT_COLLECTION,
+        query=query_vector,
+        query_filter=_analysis_filter(analysis_id),
+        limit=top_k,
+        with_payload=True,
+        with_vectors=False,
+    )
 
-    top_indices = np.argsort(scores)[::-1][:top_k]
     citations: list[CopilotCitation] = []
-    for i in top_indices:
-        score = float(scores[i])
-        if score <= 0:
-            continue
-        chunk = index.chunks[int(i)]
+    for point in response.points:
+        payload = point.payload or {}
         citations.append(CopilotCitation(
-            artifact_id=chunk.artifact_id,
-            title=chunk.title,
-            kind=chunk.kind,
-            snippet=chunk.text[:700],
-            score=round(score, 4),
-            metadata=chunk.metadata,
+            artifact_id=str(payload.get("artifact_id", "unknown")),
+            title=str(payload.get("title", "Unknown Artifact")),
+            kind=str(payload.get("kind", "summary")),
+            snippet=str(payload.get("text", ""))[:700],
+            score=round(float(point.score or 0.0), 4),
+            metadata=dict(payload.get("metadata") or {}),
         ))
     return citations
 
@@ -340,11 +429,43 @@ async def answer_with_groq(question: str, citations: list[CopilotCitation]) -> t
 
 
 def has_index(analysis_id: str) -> bool:
-    return analysis_id in _indexes
+    client = _get_qdrant_client()
+    result = client.count(
+        collection_name=QDRANT_COLLECTION,
+        count_filter=_analysis_filter(analysis_id),
+        exact=False,
+    )
+    return int(result.count) > 0
+
+
+def close_retrieval_store() -> None:
+    global _qdrant_client, _qdrant_config
+    if _qdrant_client is not None:
+        try:
+            _qdrant_client.close()
+        except Exception:
+            pass
+    _qdrant_client = None
+    _qdrant_config = None
 
 
 def _prune_old_indexes() -> None:
+    if INDEX_TTL_SECONDS <= 0:
+        return
     cutoff = time.time() - INDEX_TTL_SECONDS
-    stale = [analysis_id for analysis_id, index in _indexes.items() if index.created_at < cutoff]
-    for analysis_id in stale:
-        _indexes.pop(analysis_id, None)
+    client = _get_qdrant_client()
+    client.delete(
+        collection_name=QDRANT_COLLECTION,
+        points_selector=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="created_at",
+                    range=models.Range(lte=cutoff),
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+
+atexit.register(close_retrieval_store)

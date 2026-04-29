@@ -16,7 +16,7 @@ Decision intelligence for tabular regression problems. Upload a CSV, choose a nu
 | DAG handling | API accepts optional DAG edges, validates them, and rejects invalid DAGs before causal analysis. There is no visual DAG editor in the frontend yet. |
 | Interventions | Numeric controllable recommendations from a GradientBoostingRegressor counterfactual simulation, annotated with causal evidence when available. |
 | Executive summary | Generated from model, causal, and intervention outputs. |
-| Analysis Copilot | Optional RAG assistant at `POST /api/copilot/ask`, grounded in indexed analysis artifacts and powered by Groq when configured. |
+| Analysis Copilot | Optional RAG assistant at `POST /api/copilot/ask`, grounded in indexed analysis artifacts, stored in Qdrant, and powered by Groq when configured. |
 
 ## Architecture
 
@@ -33,7 +33,7 @@ apps/api
   app/models/pipeline.py: regression model comparison
   app/models/causal.py: adjusted OLS causal estimates
   app/models/intervention.py: counterfactual recommendation engine
-  app/rag.py: artifact corpus, lightweight vector retrieval, Groq generation
+  app/rag.py: artifact corpus, Qdrant-backed retrieval, Groq generation
   app/utils/dag.py: DAG validation and adjustment-set helpers
 ```
 
@@ -54,7 +54,7 @@ The root `render.yaml` builds the Next static export and serves it from FastAPI 
 7. Build the feature matrix.
 8. Train regression models.
 9. Run causal analysis.
-10. Generate interventions, EDA summaries, executive summary, and a Copilot retrieval index.
+10. Generate interventions, EDA summaries, executive summary, and a Copilot retrieval index in Qdrant.
 
 ### Predictive Models
 
@@ -136,10 +136,10 @@ Response:
 ### RAG Design
 
 - Corpus: dataset schema/profile summary, inferred column types and roles, model metrics, causal findings, intervention recommendations, EDA correlations, DAG validation, and executive summary.
-- Retrieval: local per-session vector index using scikit-learn `HashingVectorizer` over chunked artifacts. This is lightweight, requires no vector database, and avoids sending raw dataframes to the LLM.
+- Retrieval: chunked artifacts are vectorized with scikit-learn `HashingVectorizer` and stored in Qdrant. By default the backend uses Qdrant local persistent mode on disk; you can point it at a remote Qdrant cluster with env vars.
 - Generation: Groq OpenAI-compatible chat completions. Provider details are centralized in `app/rag.py` and configured by env.
 - Citations: every response returns retrieved snippets and artifact ids.
-- Storage: in-memory per FastAPI process with a TTL. Re-run the analysis after server restart or deploy.
+- Storage: Qdrant-backed with TTL pruning. Local mode persists on the local filesystem path you configure; use a remote Qdrant cluster for durable shared deployment storage.
 
 If `GROQ_API_KEY` is not set, retrieval still works and the route returns citations with a retrieval-only message.
 
@@ -169,6 +169,13 @@ GROQ_TIMEOUT_SECONDS=30
 RAG_INDEX_TTL_SECONDS=21600
 RAG_VECTOR_SIZE=4096
 RAG_MAX_CONTEXT_CHARS=7000
+
+# Qdrant-backed Copilot storage
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_PATH=./.qdrant
+QDRANT_COLLECTION=analysis_copilot
+QDRANT_TIMEOUT_SECONDS=10
 ```
 
 CORS is environment driven. Local development origins are allowed by default in non-production mode. Wildcard CORS is ignored when `APP_ENV=production`.
@@ -246,11 +253,11 @@ npm run type-check
 - Regression only.
 - No visual DAG editor in the frontend.
 - No authentication.
-- No persistent result storage; frontend state uses session storage and Copilot indexes are in backend memory.
+- No persistent result storage for full analysis history; frontend state uses session storage, while Copilot retrieval chunks persist in Qdrant storage.
 - No job queue or streaming progress; `/api/analyze` is synchronous.
 - Categorical controllable interventions are not implemented.
 - Causal estimates are observational and may be biased by unobserved confounders.
-- RAG retrieval uses lightweight local vectorization, not a managed vector database or neural embedding API.
+- RAG retrieval uses hashed text vectors plus Qdrant storage, not a neural embedding API.
 
 ## Planned / Future Work
 

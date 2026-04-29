@@ -13,9 +13,10 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from app.routers import analysis
-
 load_dotenv()
+
+from app.routers import analysis
+from app.rag import close_retrieval_store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,6 +62,7 @@ def _allowed_origins() -> list[str]:
 async def lifespan(app: FastAPI):
     logger.info(f"Starting — static frontend at '{STATIC_DIR}': {HAS_FRONTEND}")
     yield
+    close_retrieval_store()
 
 
 app = FastAPI(
