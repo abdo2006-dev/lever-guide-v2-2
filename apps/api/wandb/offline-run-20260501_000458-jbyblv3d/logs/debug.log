@@ -1,0 +1,9 @@
+2026-05-01 00:04:58,903 INFO    asyncio-portal-174757430:88526 [wandb_setup.py:_flush():81] Current SDK version is 0.26.1
+2026-05-01 00:04:58,903 INFO    asyncio-portal-174757430:88526 [wandb_setup.py:_flush():81] Configure stats pid to 88526
+2026-05-01 00:04:58,903 INFO    asyncio-portal-174757430:88526 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-05-01 00:04:58,904 INFO    asyncio-portal-174757430:88526 [wandb_init.py:setup_run_log_directory():723] Logging user logs to /Users/abdulrahmanahmad/Desktop/My Projects/Datathon/lever-guide-v2 2/apps/api/wandb/offline-run-20260501_000458-jbyblv3d/logs/debug.log
+2026-05-01 00:04:58,904 INFO    asyncio-portal-174757430:88526 [wandb_init.py:setup_run_log_directory():724] Logging internal logs to /Users/abdulrahmanahmad/Desktop/My Projects/Datathon/lever-guide-v2 2/apps/api/wandb/offline-run-20260501_000458-jbyblv3d/logs/debug-internal.log
+2026-05-01 00:04:58,905 INFO    asyncio-portal-174757430:88526 [wandb_init.py:init():850] calling init triggers
+2026-05-01 00:04:58,905 INFO    asyncio-portal-174757430:88526 [wandb_init.py:init():855] wandb.init called with sweep_config: {}
+config: {'request_id': '921113ef', 'dataset_name': 'wandb-check', 'target': 'scrap_rate', 'task': 'regression', 'improve_direction': 'decrease', 'random_seed': 42, 'row_count': 120, 'column_count': 3, 'roles': {'pressure': 'controllable', 'humidity': 'confounder', 'scrap_rate': 'outcome'}, '_wandb': {}}
+2026-05-01 00:04:58,905 INFO    asyncio-portal-174757430:88526 [wandb_init.py:init():898] starting backend

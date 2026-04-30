@@ -12,6 +12,12 @@ import pandas as pd
 def _as_serializable(value: Any) -> Any:
     if is_dataclass(value):
         return asdict(value)
+    if hasattr(value, "__dict__") and not isinstance(value, type):
+        return {
+            k: _as_serializable(v)
+            for k, v in vars(value).items()
+            if not k.startswith("_")
+        }
     if isinstance(value, dict):
         return {k: _as_serializable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
