@@ -6,7 +6,6 @@ Decision support for tabular regression problems. Upload a CSV, choose a numeric
 
 - Main challenge repository: https://github.com/abdo2006-dev/datathon-CUB-2026
 - This implementation repository: https://github.com/abdo2006-dev/lever-guide-v2-2
-- Live demo: not listed as canonical until the deployment is stable. If the GitHub repository sidebar still points to `lever-guide-v2-2.vercel.app`, update the repository Website field to the main challenge repository above.
 
 ## What Works Today
 
@@ -352,17 +351,6 @@ If GitHub raw view shows these as extremely long one-line files, check that the 
 - No persistent result history for full analysis runs; frontend state uses session storage, while Copilot retrieval chunks persist in Qdrant storage.
 - No job queue or streaming progress; `/api/analyze` is synchronous.
 - RAG retrieval uses hashed text vectors plus Qdrant storage, not a neural embedding API.
-
-## Show-Off Demo Flow
-
-1. Start backend and frontend.
-2. Open the app, load the demo dataset, assign roles, and run analysis.
-3. Capture the Predictive Models screen showing model comparison, metrics, feature importance, and actual-vs-predicted scatter.
-4. Capture the Copilot screen showing a grounded answer with citations.
-5. Optional: capture W&B run overview/config, model metrics table, and artifacts.
-6. Optional: capture a terminal verification that Qdrant collection `analysis_copilot` exists and has indexed points.
-
-For LinkedIn or portfolio screenshots, prioritize the polished UI screens. Terminal screenshots are useful proof, but they should come after the product screenshots.
 
 ## Planned / Future Work
 
