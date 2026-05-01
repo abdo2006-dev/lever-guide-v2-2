@@ -36,7 +36,7 @@ const EVTYPE: Record<string, string> = {
 const TABS = [
   { id: "overview",      label: "Overview" },
   { id: "predictive",    label: "Predictive Models" },
-  { id: "causal",        label: "Causal Analysis" },
+  { id: "causal",        label: "Effect Estimates" },
   { id: "interventions", label: "Interventions" },
   { id: "executive",     label: "Executive Summary" },
   { id: "copilot",       label: "Copilot" },
@@ -128,7 +128,7 @@ function OverviewTab({ analysis, best, sigN, topIv }: {
           sub={best?.display_name ?? "—"}
           color={n(best?.metrics?.r2) > 0.6 ? "green" : n(best?.metrics?.r2) > 0.3 ? "yellow" : "red"} />
         <KpiCard label="Test RMSE"  value={fmt(best?.metrics?.rmse)} sub={`MAE ${fmt(best?.metrics?.mae)}`} />
-        <KpiCard label="Causal Levers" value={String(sigN)} sub="p < 0.05" color="blue" />
+        <KpiCard label="Adjusted Levers" value={String(sigN)} sub="p < 0.05" color="blue" />
         <KpiCard label="Top Impact"
           value={topIv ? `${Math.abs(n(topIv.expected_kpi_change_pct)).toFixed(1)}%` : "—"}
           sub={topIv?.feature ?? "No interventions"} color="purple" />
@@ -343,7 +343,7 @@ function CausalTab({ effects, target }: { effects: CausalEffect[]; target: strin
         β is the standardised coefficient: <em>effect on {target} per +1 SD increase in the feature</em>, with all adjustment variables held constant.{" "}
         Mediators are excluded (blocking the causal path would absorb the effect).
         95% CIs and p-values are from OLS inference under homoskedasticity assumptions.
-        This is <strong>observational</strong> — unobserved confounders may bias estimates.
+        This is <strong>observational</strong> - unobserved confounders may bias estimates.
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -422,8 +422,8 @@ function InterventionsTab({ interventions, target }: { interventions: Interventi
       <div className="rounded-xl border border-border/60 bg-card p-4 text-xs text-muted-foreground leading-relaxed">
         <strong className="text-foreground">How recommendations are generated:</strong>{" "}
         A gradient boosted regressor simulates shifting each controllable variable by ±1 SD while holding all others at their mean
-        (counterfactual prediction). Where back-door OLS is significant (p&lt;0.05) the estimate is labelled{" "}
-        <span className="text-blue-400 font-medium">causal</span>, otherwise{" "}
+        (counterfactual prediction). Where back-door OLS is significant (p&lt;0.05) the estimate is labeled{" "}
+        <span className="text-blue-400 font-medium">adjusted evidence</span>, otherwise{" "}
         <span className="text-purple-400 font-medium">predictive</span>.
         Ranked by |estimated KPI change|. Always validate with controlled experiments.
       </div>
@@ -435,6 +435,7 @@ function InterventionsTab({ interventions, target }: { interventions: Interventi
 function IvCard({ iv, target }: { iv: Intervention; target: string }) {
   const [open, setOpen] = useState(false);
   const improving = n(iv.expected_kpi_change) < 0;
+  const evidenceLabel = iv.evidence_type === "causal" ? "adjusted evidence" : iv.evidence_type;
   return (
     <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3 bg-muted/10 border-b border-border/40">
@@ -445,7 +446,7 @@ function IvCard({ iv, target }: { iv: Intervention; target: string }) {
           <p className="font-semibold text-sm font-mono truncate">{iv.feature}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <Badge cls={EVTYPE[iv.evidence_type] ?? ""}>{iv.evidence_type}</Badge>
+          <Badge cls={EVTYPE[iv.evidence_type] ?? ""}>{evidenceLabel}</Badge>
           <Badge cls={STRENGTH[iv.evidence_strength] ?? ""}>{iv.evidence_strength}</Badge>
           <span className={`font-mono font-bold text-sm ${improving ? "text-green-400" : "text-red-400"}`}>
             {n(iv.expected_kpi_change) > 0 ? "+" : ""}{n(iv.expected_kpi_change_pct).toFixed(1)}% {target}

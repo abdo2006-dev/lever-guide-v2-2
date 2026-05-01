@@ -10,8 +10,8 @@ export const metadata: Metadata = {
   title: "LeverGuide — Decision Intelligence for Tabular Data",
   description:
     "Upload any dataset, pick a KPI, and get ranked, explainable recommendations " +
-    "backed by predictive modelling and causal analysis.",
-  keywords: ["causal inference", "ML", "decision intelligence", "KPI", "data analysis"],
+    "backed by predictive modelling and transparent effect estimates.",
+  keywords: ["ML", "decision intelligence", "KPI", "data analysis", "effect estimates"],
   openGraph: {
     title: "LeverGuide",
     description: "Don't just predict. Decide what to change.",

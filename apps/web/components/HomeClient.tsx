@@ -14,8 +14,8 @@ const FEATURES = [
   },
   {
     icon: GitBranch,
-    title: "DAG-aware causal analysis",
-    body: "Assign column roles and optionally submit DAG edges through the API. The engine validates the graph before causal analysis.",
+    title: "Assumption-based effect estimates",
+    body: "Assign column roles and optionally submit DAG edges through the API. The engine validates the graph before adjusted OLS estimates.",
   },
   {
     icon: Lightbulb,
@@ -79,7 +79,7 @@ export function HomeClient() {
       {/* Hero */}
       <section className="container py-24 md:py-36 text-center max-w-4xl mx-auto">
         <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-3 py-1 text-xs text-primary mb-6">
-          <Zap className="h-3 w-3" /> v2 — production-grade ML + causal analysis
+          <Zap className="h-3 w-3" /> v2 - ML decision support with transparent caveats
         </div>
         <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-tight">
           Don&apos;t just predict.{" "}
@@ -140,7 +140,7 @@ export function HomeClient() {
           <h2 className="text-2xl font-bold mb-3">Serious ML under the hood</h2>
           <p className="text-muted-foreground text-sm leading-relaxed max-w-xl mx-auto">
             Python FastAPI backend running scikit-learn, XGBoost, and LightGBM.
-            Causal estimates use back-door adjusted OLS with statsmodels.
+            Effect estimates use back-door adjusted OLS with statsmodels.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
             {["Next.js 15","TypeScript","FastAPI","scikit-learn","XGBoost","LightGBM","statsmodels","Vercel","Render"].map((t) => (

@@ -49,7 +49,7 @@ const ANALYSIS_MESSAGES = [
   "Training Random Forest…",
   "Training XGBoost…",
   "Training LightGBM…",
-  "Running causal analysis…",
+  "Running adjusted effect estimates…",
   "Computing interventions…",
   "Building executive summary…",
   "Finalising results…",
@@ -371,13 +371,13 @@ export default function SetupPage() {
               active={step === 4}
               done={false}
               title="Run analysis"
-              subtitle="Trains 5 models, runs causal adjustment, and generates intervention recommendations."
+              subtitle="Trains 5 models, runs adjusted effect estimates, and generates intervention recommendations."
             >
               {/* Checklist */}
               <div className="mt-4 space-y-1.5">
                 <Check ok={!!store.target}        label={store.target ? `Target: ${store.target}` : "No target selected"} />
                 <Check ok={controllable.length>0} label={`${controllable.length} controllable variable${controllable.length!==1?"s":""}`} />
-                <Check ok={confounders.length>0}  label={`${confounders.length} confounder${confounders.length!==1?"s":""} — improves causal estimates`} warn />
+                <Check ok={confounders.length>0}  label={`${confounders.length} confounder${confounders.length!==1?"s":""} — improves adjusted estimates`} warn />
               </div>
 
               {/* Error */}
@@ -408,7 +408,7 @@ export default function SetupPage() {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Running: OLS · Ridge · Random Forest · XGBoost · LightGBM + causal analysis
+                    Running: OLS · Ridge · Random Forest · XGBoost · LightGBM + adjusted effect estimates
                   </p>
                 </div>
               )}
