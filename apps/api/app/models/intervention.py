@@ -1,31 +1,62 @@
 """
-Intervention recommendation engine.
+Predictive what-if simulation.
 
-Combines two evidence sources:
-  1. Causal: adjusted OLS effect (direction + magnitude, with caveats)
-  2. Predictive: GBR counterfactual simulation (what-if) on numeric features only
+What this produces is a **predictive what-if**: a gradient-boosted regressor is
+fitted on the analysed rows, one column is overwritten, and the mean prediction
+is compared with the baseline. It is not an identified causal effect, and the
+module does not pretend otherwise.
+
+Each candidate is then screened before it may be presented as an action:
+
+  * feasibility — could the row it produces exist? (`feasibility.py`)
+  * support     — is the proposed value inside the range the model has seen?
+  * agreement   — does the adjusted effect estimate point the same way?
+  * mechanism   — is the pathway this lever acts through actually modelled?
+
+Only candidates that clear all four are ranked. The rest keep their numbers and
+carry a status saying why they are not actionable, because a rejected candidate
+is information, not noise.
 """
 from __future__ import annotations
+
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
+
+from app.models.feasibility import check_intervention
+from app.ontology.schema import DatasetOntology
 from app.schemas import CausalEffect, Intervention
 
+# Replicates for the row-resampling interval. Cheap: it resamples two existing
+# prediction vectors and refits nothing.
+BOOTSTRAP_REPLICATES = 400
 
-def _evidence_type(has_causal: bool, causal_sig: bool) -> str:
-    if has_causal and causal_sig:
-        return "causal"
-    if has_causal:
-        return "mixed"
-    return "predictive"
+UNCERTAINTY_ROW_BOOTSTRAP = (
+    "Row-resampling interval over the simulated change. It holds the fitted "
+    "model fixed, so it captures variation across production intervals but not "
+    "uncertainty in the model itself; the true interval is wider."
+)
 
-
-def _evidence_strength(causal_p: float | None, pred_delta_magnitude: float, kpi_std: float) -> str:
-    if causal_p is not None and causal_p < 0.01 and pred_delta_magnitude > 0.1 * kpi_std:
-        return "strong"
-    if causal_p is not None and causal_p < 0.05:
-        return "moderate"
-    return "weak"
+# Why a lever's simulation cannot be read as an intervention estimate, keyed by
+# the ontology's declared eligibility.
+_ELIGIBILITY_BLOCKERS: dict[str, str] = {
+    "derived_constrained": (
+        "This value is determined by other columns, so it cannot be changed on "
+        "its own."
+    ),
+    "mediated_unsupported": (
+        "This lever acts through a mediator that this simulation holds fixed, so "
+        "the simulated change is not a usable estimate of its effect. Mediator "
+        "propagation is not implemented."
+    ),
+    "preliminary": (
+        "This lever acts through a mediator that this simulation holds fixed. "
+        "The result is preliminary, not an intervention estimate."
+    ),
+    "not_eligible": "This variable is not something an operator or planner sets.",
+}
 
 
 def _tradeoff(feature: str, direction: str) -> str:
@@ -34,12 +65,92 @@ def _tradeoff(feature: str, direction: str) -> str:
         ("increase", "barrel_temperature_c"):   "Elevated barrel temp risks resin degradation.",
         ("decrease", "cooling_time_s"):          "Faster cooling may reduce dimensional stability.",
         ("increase", "mold_temperature_c"):      "Higher mold temp improves surface finish but slows cycle.",
-        ("decrease", "cycle_time_s"):            "Shorter cycles may increase defect rate on complex parts.",
+        ("increase", "cooling_time_s"):          "Longer cooling raises cycle time and reduces throughput.",
     }
     return lookup.get(
         (direction, feature),
-        f"Monitor downstream effects of {direction}ing {feature}.",
+        f"Monitor downstream effects of {direction}ing {feature}. "
+        "This trade-off is not quantified.",
     )
+
+
+def _evidence_strength(
+    causal_row: Optional[CausalEffect],
+    pred_delta_magnitude: float,
+    kpi_std: float,
+) -> str:
+    """
+    Strength of the *predictive* signal, gated on the adjusted estimate.
+
+    An estimate whose interval includes zero can never make a simulation strong,
+    however large the simulated change is — that was the source study's own rule
+    for excluding hold pressure from its action package.
+    """
+    if causal_row is None:
+        return "weak"
+    if not causal_row.interval_excludes_zero:
+        return "weak"
+    if causal_row.p_value < 0.01 and pred_delta_magnitude > 0.1 * kpi_std:
+        return "strong"
+    if causal_row.p_value < 0.05:
+        return "moderate"
+    return "weak"
+
+
+def _adjustment_support(
+    causal_row: Optional[CausalEffect], direction: str, improve_direction: str
+) -> tuple[str, str]:
+    """
+    Does the adjusted estimate agree with the direction the simulation picked?
+
+    Returns (support, human explanation). The old code awarded a "causal" badge
+    on a p-value alone and never compared signs, which shipped recommendations
+    that pointed the opposite way from their own estimate.
+    """
+    if causal_row is None:
+        return "none", "No adjusted effect estimate is available for this variable."
+    if not causal_row.interval_excludes_zero:
+        return "inconclusive", (
+            f"The adjusted estimate's 95% interval "
+            f"[{causal_row.conf_int_lo:+.3f}, {causal_row.conf_int_hi:+.3f}] "
+            "includes zero, so it neither supports nor contradicts this direction."
+        )
+
+    beta = causal_row.effect_per_std
+    # Moving the lever up moves the outcome in the sign of beta.
+    outcome_moves = "increase" if (beta > 0) == (direction == "increase") else "decrease"
+    if outcome_moves == improve_direction:
+        return "aligned", (
+            f"The adjusted estimate (β={beta:+.3f}/SD) points the same way: "
+            f"{direction[:-1]}ing this lever is estimated to {improve_direction} "
+            "the outcome."
+        )
+    return "conflicting", (
+        f"The adjusted estimate (β={beta:+.3f}/SD) points the other way — it "
+        f"implies {direction[:-1]}ing this lever would {outcome_moves} the "
+        "outcome, not "
+        f"{improve_direction} it."
+    )
+
+
+def _bootstrap_interval(
+    base_pred: np.ndarray, shifted_pred: np.ndarray, rng: np.random.Generator
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Percentile interval for the mean simulated change, resampling rows.
+
+    Deliberately narrow in scope: the fitted model is held fixed, so this is the
+    row-to-row component of the uncertainty only. Returns (None, None) rather
+    than a placeholder when there is too little data to resample.
+    """
+    diff = shifted_pred - base_pred
+    n = len(diff)
+    if n < 30:
+        return None, None
+    idx = rng.integers(0, n, size=(BOOTSTRAP_REPLICATES, n))
+    means = diff[idx].mean(axis=1)
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    return float(lo), float(hi)
 
 
 def run_intervention_engine(
@@ -51,8 +162,10 @@ def run_intervention_engine(
     improve_direction: str = "decrease",
     top_n: int = 8,
     random_seed: int = 42,
+    ontology: Optional[DatasetOntology] = None,
 ) -> list[Intervention]:
     causal_map = {e.feature: e for e in causal_effects}
+    rng = np.random.default_rng(random_seed)
 
     # Only numeric features can be used in the GBR counterfactual.
     numeric_sim_features = [
@@ -83,98 +196,171 @@ def run_intervention_engine(
     )
     gbr.fit(X, y)
 
-    kpi_std  = float(np.std(y)) or 1.0
+    kpi_std = float(np.std(y)) or 1.0
     kpi_mean = float(np.mean(y))
-    base_mean = float(np.mean(gbr.predict(X)))
-    feat_idx  = {f: i for i, f in enumerate(numeric_sim_features)}
+    base_pred = gbr.predict(X)
+    base_mean = float(np.mean(base_pred))
+    feat_idx = {f: i for i, f in enumerate(numeric_sim_features)}
 
-    numeric_controllable = [f for f in controllable if f in feat_idx]
+    # Everything the user or the ontology says is a lever, whether or not it can
+    # be ranked. A variable that is blocked is reported as blocked, not omitted.
+    candidates = [f for f in controllable if f in feat_idx]
     interventions: list[Intervention] = []
 
-    for feat in numeric_controllable:
+    for feat in candidates:
         j = feat_idx[feat]
         col_vals = df_model[feat]
         cur_mean = float(col_vals.mean())
-        cur_std  = float(col_vals.std()) or 1.0
+        cur_std = float(col_vals.std()) or 1.0
         p10 = float(col_vals.quantile(0.1))
         p90 = float(col_vals.quantile(0.9))
 
-        best_delta, best_direction, best_sim_impact, best_suggested = None, None, None, None
+        spec = ontology.spec(feat) if ontology else None
+        # Support bounds come from declared physics where we have them, and from
+        # the observed range otherwise. The previous p90*1.5 / p10*0.5 heuristic
+        # was arbitrary and produced nonsense for negative-valued columns.
+        obs_lo, obs_hi = float(col_vals.min()), float(col_vals.max())
+        if spec and spec.valid_range:
+            lo_bound = max(obs_lo, spec.valid_range[0])
+            hi_bound = min(obs_hi, spec.valid_range[1])
+        else:
+            lo_bound, hi_bound = obs_lo, obs_hi
+        if lo_bound > hi_bound:  # declared and observed do not overlap
+            lo_bound, hi_bound = obs_lo, obs_hi
 
+        best = None
         for sign, direction in [(+1, "increase"), (-1, "decrease")]:
-            lo_bound = p10 - abs(p10) * 0.5 if p10 <= 0 else p10 * 0.5
-            target_val = float(np.clip(cur_mean + sign * cur_std, lo_bound, p90 * 1.5))
-            X_shifted       = X.copy()
-            X_shifted[:, j] = target_val
-            sim_impact      = float(np.mean(gbr.predict(X_shifted))) - base_mean
+            target_val = float(np.clip(cur_mean + sign * cur_std, lo_bound, hi_bound))
+            shifted = X.copy()
+            shifted[:, j] = target_val
+            shifted_pred = gbr.predict(shifted)
+            sim_impact = float(np.mean(shifted_pred)) - base_mean
 
             improves = (
                 (improve_direction == "decrease" and sim_impact < 0)
                 or (improve_direction == "increase" and sim_impact > 0)
             )
-            if improves and (best_sim_impact is None or abs(sim_impact) > abs(best_sim_impact)):
-                best_delta, best_direction = target_val - cur_mean, direction
-                best_sim_impact, best_suggested = sim_impact, target_val
+            if improves and (best is None or abs(sim_impact) > abs(best[2])):
+                best = (target_val, direction, sim_impact, shifted_pred)
 
-        if best_direction is None or best_sim_impact is None or best_suggested is None:
+        if best is None:
             continue
+        suggested, direction, sim_impact, shifted_pred = best
 
         causal_row = causal_map.get(feat)
-        has_causal = causal_row is not None
-        causal_sig = has_causal and causal_row.p_value < 0.05  # type: ignore[union-attr]
-        causal_p   = causal_row.p_value if has_causal else None
+        support, support_note = _adjustment_support(causal_row, direction, improve_direction)
+        report = check_intervention(
+            feature=feat, value=suggested, df=df,
+            ontology=ontology, controllable=controllable,
+        )
 
-        ev_type     = _evidence_type(has_causal, causal_sig)
-        ev_str      = _evidence_strength(causal_p, abs(best_sim_impact), kpi_std)
-        exp_kpi     = best_sim_impact
-        exp_kpi_pct = (exp_kpi / abs(kpi_mean) * 100) if kpi_mean != 0 else 0.0
-
-        causal_note = ""
-        if has_causal:
-            sign_word = "positively" if causal_row.effect_per_std > 0 else "negatively"  # type: ignore[union-attr]
-            causal_note = (
-                f" Causal analysis (p={causal_row.p_value:.3f}) indicates "  # type: ignore[union-attr]
-                f"this feature {sign_word} affects {target} "
-                f"(β={causal_row.effect_per_std:+.3f}/SD)."  # type: ignore[union-attr]
+        # ── Status. Order matters: report the most fundamental blocker. ───────
+        status: str
+        reason: str
+        if report.verdict == "not_eligible":
+            status, reason = "unsupported", report.reason
+        elif report.verdict == "infeasible":
+            status, reason = "infeasible", report.reason
+        elif spec is not None and spec.intervention_eligibility in _ELIGIBILITY_BLOCKERS:
+            blocker = _ELIGIBILITY_BLOCKERS[spec.intervention_eligibility]
+            if spec.intervention_eligibility == "derived_constrained":
+                status = "infeasible"
+            else:
+                status = "exploratory"
+            reason = blocker
+        elif spec is not None and spec.evidence_status == "conflicting":
+            status = "conflicting_evidence"
+            reason = (
+                "Evidence for this lever is specification-dependent: changing the "
+                "adjustment set changes the conclusion, so no direction is "
+                "asserted. " + support_note
             )
+        elif support == "conflicting":
+            status, reason = "conflicting_evidence", support_note
+        elif report.verdict == "unsupported":
+            status, reason = "unsupported", report.reason
+        elif causal_row is None:
+            status = "exploratory"
+            reason = (
+                "No adjusted effect estimate is available for this variable, so "
+                "this is a predictive what-if only."
+            )
+        elif support == "inconclusive":
+            status = "exploratory"
+            reason = support_note
+        else:
+            status = "eligible"
+            reason = "Feasible, inside observed support, and consistent with the adjusted estimate."
+
+        # ── Uncertainty ──────────────────────────────────────────────────────
+        ci_lo, ci_hi = _bootstrap_interval(base_pred, shifted_pred, rng)
+        if ci_lo is None:
+            interval_method = None
+            uncertainty_status = (
+                "not_computed: too few rows to resample an interval"
+            )
+        else:
+            interval_method = "row_bootstrap_fixed_model"
+            uncertainty_status = "row_bootstrap_fixed_model"
+
+        exp_kpi_pct = (sim_impact / abs(kpi_mean) * 100) if kpi_mean != 0 else 0.0
 
         rationale = (
-            f"Shifting {feat} {best_direction} by ~1σ is predicted to "
-            f"{'reduce' if improve_direction == 'decrease' else 'increase'} "
-            f"{target} by {abs(exp_kpi):.3f} ({abs(exp_kpi_pct):.1f}%).{causal_note}"
+            f"Simulation: setting {feat} to {suggested:.4g} "
+            f"({'+' if suggested >= cur_mean else ''}{suggested - cur_mean:.4g} "
+            f"from its mean) changes predicted {target} by {sim_impact:+.4f} "
+            f"({exp_kpi_pct:+.1f}%). {support_note}"
         )
 
         assumptions = [
-            "Other variables remain at their current mean values.",
+            "Each row keeps its own observed values for every other column; only "
+            "this variable is changed, and the change is averaged across rows.",
+            "The simulation model was fitted on these same rows, so its "
+            "magnitudes are optimistic relative to new data.",
+            "Columns physically coupled to this one are not updated, beyond the "
+            "coupling constraints checked above.",
             "The training-data distribution is representative of future conditions.",
         ]
-        if not causal_sig:
-            assumptions.append("This recommendation is primarily predictive — not confirmed causal.")
+        if status != "eligible":
+            assumptions.append(f"Not offered as an action: {reason}")
 
         interventions.append(Intervention(
             rank=0,
             feature=feat,
-            direction=best_direction,
+            direction=direction,
             current_mean=cur_mean,
             current_p10=p10,
             current_p90=p90,
-            suggested_value=best_suggested,
-            delta=best_delta,
-            delta_pct=(best_delta / abs(cur_mean) * 100) if cur_mean != 0 else 0.0,
-            expected_kpi_change=exp_kpi,
+            suggested_value=suggested,
+            delta=suggested - cur_mean,
+            delta_pct=((suggested - cur_mean) / abs(cur_mean) * 100) if cur_mean != 0 else 0.0,
+            expected_kpi_change=sim_impact,
             expected_kpi_change_pct=exp_kpi_pct,
-            evidence_strength=ev_str,
-            evidence_type=ev_type,
-            tradeoff=_tradeoff(feat, best_direction),
+            expected_kpi_change_lo=ci_lo,
+            expected_kpi_change_hi=ci_hi,
+            interval_method=interval_method,  # type: ignore[arg-type]
+            uncertainty_status=uncertainty_status,
+            status=status,  # type: ignore[arg-type]
+            status_reason=reason,
+            support_status=report.support_status,  # type: ignore[arg-type]
+            feasibility_checks=report.checks,
+            evidence_strength=_evidence_strength(causal_row, abs(sim_impact), kpi_std),
+            adjustment_support=support,  # type: ignore[arg-type]
+            tradeoff=_tradeoff(feat, direction),
             rationale=rationale,
             assumptions=assumptions,
             caveat=(
-                "This estimate is based on observational data. "
-                "Validate with a controlled experiment before operational use."
+                "This is a predictive what-if, not an identified causal effect. "
+                "Validate with a controlled test before operational use."
             ),
         ))
 
-    interventions.sort(key=lambda x: abs(x.expected_kpi_change), reverse=True)
-    for i, iv in enumerate(interventions[:top_n], 1):
+    # Only eligible candidates are ranked. Everything else keeps rank 0 and is
+    # returned for the diagnostics section rather than being discarded.
+    eligible = [iv for iv in interventions if iv.status == "eligible"]
+    others = [iv for iv in interventions if iv.status != "eligible"]
+    eligible.sort(key=lambda x: abs(x.expected_kpi_change), reverse=True)
+    for i, iv in enumerate(eligible[:top_n], 1):
         iv.rank = i
-    return interventions[:top_n]
+    others.sort(key=lambda x: abs(x.expected_kpi_change), reverse=True)
+    return eligible[:top_n] + others

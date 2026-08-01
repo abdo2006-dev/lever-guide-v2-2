@@ -20,7 +20,16 @@ def validate_dag(
     columns: list[str],
     target: str,
     controllable: list[str],
+    dag_source: str = "assumed_from_roles",
+    graph_assumption: str | None = None,
 ) -> DagValidationResult:
+    """
+    Structural validation only.
+
+    `valid` means the graph is acyclic and every node is a real column. It has
+    never meant that the graph is scientifically defensible, which is why the
+    result also carries `dag_source` and `graph_assumption`.
+    """
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -63,6 +72,8 @@ def validate_dag(
         valid=not errors,
         errors=errors,
         warnings=warnings,
+        dag_source=dag_source,  # type: ignore[arg-type]
+        graph_assumption=graph_assumption,
     )
 
 
@@ -136,11 +147,17 @@ def auto_dag(
     target: str,
 ) -> list[DagEdge]:
     """
-    Generate a sensible default DAG when the user hasn't specified one:
+    Last-resort default graph, built from role labels alone:
       confounders → controllables (confounders cause process variables)
       controllables → target
       context → target
       confounders → target
+
+    This is a template, not a domain model. It encodes no lever-to-lever
+    structure, so it cannot express a lever that responds to another lever, and
+    the adjustment set it implies is identical for every lever. A dataset with a
+    declared ontology uses that ontology's graph instead; this runs only when
+    there is neither a user-supplied graph nor an ontology.
     """
     edges: list[DagEdge] = []
     for cf in confounders:

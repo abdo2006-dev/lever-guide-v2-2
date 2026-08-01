@@ -1,26 +1,56 @@
 """
 Predictive modelling pipeline — tuned for Render free tier (512 MB RAM, ~30s budget).
-Five models, 3-fold CV, capped estimators.
+
+Up to five models. XGBoost and LightGBM are **optional**: they need a system
+OpenMP runtime that is not present in every environment, and the application
+starts and runs without them. What is not optional is saying so — every
+configured model reports a status, so "three models ran" is never displayed as
+"five models ran".
 """
 from __future__ import annotations
+
 import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
 import statsmodels.api as sm
 from app.schemas import (
-    PredictiveResult, ModelMetrics, FeatureImportance, PredictionPoint, Coefficient
+    Coefficient, FeatureImportance, ModelMetrics, ModelStatus, PredictionPoint,
+    PredictiveResult,
 )
 
+# Import failures are recorded, not swallowed: the reason is what the user needs.
 try:
     import xgboost as xgb
-except Exception:
+    XGB_IMPORT_ERROR: str | None = None
+except Exception as exc:  # pragma: no cover - environment dependent
     xgb = None  # type: ignore[assignment]
+    XGB_IMPORT_ERROR = str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc)
 
 try:
     import lightgbm as lgb
-except Exception:
+    LGBM_IMPORT_ERROR: str | None = None
+except Exception as exc:  # pragma: no cover - environment dependent
     lgb = None  # type: ignore[assignment]
+    LGBM_IMPORT_ERROR = str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc)
+
+
+DISPLAY_NAMES: dict[str, str] = {
+    "ols": "OLS Regression",
+    "ridge": "Ridge Regression",
+    "rf": "Random Forest",
+    "xgb": "XGBoost",
+    "lgbm": "LightGBM",
+}
+
+
+def _truncate(detail: str, limit: int = 300) -> str:
+    detail = " ".join(detail.split())
+    return detail if len(detail) <= limit else detail[: limit - 1] + "…"
+
+
+class _Skipped(Exception):
+    """A model whose status has already been recorded; skip without re-recording."""
 
 
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray, n_features: int) -> dict:
@@ -50,7 +80,15 @@ def run_predictive_pipeline(
     task: str = "regression",
     random_seed: int = 42,
     run_cv: bool = True,
-) -> list[PredictiveResult]:
+) -> tuple[list[PredictiveResult], list[ModelStatus]]:
+    """
+    Returns (results, statuses).
+
+    `statuses` has one entry per configured model, including the ones that did
+    not run and why. A caller that only reads `results` cannot tell a model that
+    was never configured from one that crashed, which is the failure this
+    two-value return exists to prevent.
+    """
     n, p = X.shape
     test_size = min(0.2, max(0.1, 200 / n))
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=random_seed)
@@ -58,6 +96,15 @@ def run_predictive_pipeline(
     CV_FOLDS = 3
 
     results: list[PredictiveResult] = []
+    statuses: list[ModelStatus] = []
+
+    def record(model: str, status: str, detail: str | None = None) -> None:
+        statuses.append(ModelStatus(
+            model=model,  # type: ignore[arg-type]
+            display_name=DISPLAY_NAMES[model],
+            status=status,  # type: ignore[arg-type]
+            detail=_truncate(detail) if detail else None,
+        ))
 
     # ── OLS ──────────────────────────────────────────────────────────────────
     try:
@@ -83,8 +130,9 @@ def run_predictive_pipeline(
                          residual=float(y_te[i]-y_pred[i])) for i in range(min(len(y_te),400))],
             coefficients=coefs,
         ))
-    except Exception:
-        pass
+        record("ols", "succeeded")
+    except Exception as exc:
+        record("ols", "training_failed", str(exc))
 
     # ── Ridge ─────────────────────────────────────────────────────────────────
     try:
@@ -102,8 +150,9 @@ def run_predictive_pipeline(
             predictions=[PredictionPoint(actual=float(y_te[i]), predicted=float(y_pred[i]),
                          residual=float(y_te[i]-y_pred[i])) for i in range(min(len(y_te),400))],
         ))
-    except Exception:
-        pass
+        record("ridge", "succeeded")
+    except Exception as exc:
+        record("ridge", "training_failed", str(exc))
 
     # ── Random Forest ─────────────────────────────────────────────────────────
     try:
@@ -122,17 +171,25 @@ def run_predictive_pipeline(
             predictions=[PredictionPoint(actual=float(y_te[i]), predicted=float(y_pred[i]),
                          residual=float(y_te[i]-y_pred[i])) for i in range(min(len(y_te),400))],
         ))
-    except Exception:
-        pass
+        record("rf", "succeeded")
+    except Exception as exc:
+        record("rf", "training_failed", str(exc))
 
-    # ── XGBoost ───────────────────────────────────────────────────────────────
+    # ── XGBoost (optional) ────────────────────────────────────────────────────
     try:
         if xgb is None:
-            raise RuntimeError("xgboost is unavailable")
+            record(
+                "xgb", "unavailable_dependency",
+                XGB_IMPORT_ERROR or "xgboost could not be imported in this environment.",
+            )
+            raise _Skipped
         xgb_m = xgb.XGBRegressor(n_estimators=150, learning_rate=0.08, max_depth=4,
                                    subsample=0.8, colsample_bytree=0.8, min_child_weight=15,
                                    random_state=random_seed, verbosity=0, n_jobs=1)
-        xgb_m.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], verbose=False)
+        # The test set is deliberately not passed to fit(): without early
+        # stopping it changes nothing, and it makes held-out data an input to
+        # training, which is one flag away from being leakage.
+        xgb_m.fit(X_tr, y_tr, verbose=False)
         y_pred = xgb_m.predict(X_te)
         m = _metrics(y_te, y_pred, p)
         results.append(PredictiveResult(
@@ -142,13 +199,20 @@ def run_predictive_pipeline(
             predictions=[PredictionPoint(actual=float(y_te[i]), predicted=float(y_pred[i]),
                          residual=float(y_te[i]-y_pred[i])) for i in range(min(len(y_te),400))],
         ))
-    except Exception:
+        record("xgb", "succeeded")
+    except _Skipped:
         pass
+    except Exception as exc:
+        record("xgb", "training_failed", str(exc))
 
-    # ── LightGBM ──────────────────────────────────────────────────────────────
+    # ── LightGBM (optional) ───────────────────────────────────────────────────
     try:
         if lgb is None:
-            raise RuntimeError("lightgbm is unavailable")
+            record(
+                "lgbm", "unavailable_dependency",
+                LGBM_IMPORT_ERROR or "lightgbm could not be imported in this environment.",
+            )
+            raise _Skipped
         lgbm_m = lgb.LGBMRegressor(n_estimators=150, learning_rate=0.08, max_depth=4,
                                     num_leaves=20, min_child_samples=20,
                                     subsample=0.8, colsample_bytree=0.8,
@@ -163,12 +227,20 @@ def run_predictive_pipeline(
             predictions=[PredictionPoint(actual=float(y_te[i]), predicted=float(y_pred[i]),
                          residual=float(y_te[i]-y_pred[i])) for i in range(min(len(y_te),400))],
         ))
-    except Exception:
+        record("lgbm", "succeeded")
+    except _Skipped:
         pass
+    except Exception as exc:
+        record("lgbm", "training_failed", str(exc))
 
     if not results:
-        raise RuntimeError("All models failed — check your data.")
+        detail = "; ".join(f"{s.display_name}: {s.status}" for s in statuses)
+        raise RuntimeError(f"All models failed — check your data. ({detail})")
 
+    # The winner is selected on the same held-out set its score is reported on,
+    # so that score is optimistically biased. Fixing that needs a three-way
+    # split or nested CV and is deferred to the analytical-core phase.
     results.sort(key=lambda r: r.metrics.r2, reverse=True)
     results[0].is_winner = True
-    return results
+    statuses.sort(key=lambda s: list(DISPLAY_NAMES).index(s.model))
+    return results, statuses

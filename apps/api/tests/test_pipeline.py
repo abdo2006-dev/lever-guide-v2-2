@@ -142,10 +142,12 @@ def test_pipeline_returns_results(sample_df):
     X, y, names, _ = build_feature_matrix(
         sample_df, ["pressure", "temperature"], "scrap_rate"
     )
-    results = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
+    results, statuses = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
     assert len(results) >= 1
     winner = [r for r in results if r.is_winner]
     assert len(winner) == 1
+    # Every configured model is accounted for, whether or not it ran.
+    assert {s.model for s in statuses} == {"ols", "ridge", "rf", "xgb", "lgbm"}
 
 
 def test_pipeline_winner_has_best_r2(sample_df):
@@ -154,7 +156,7 @@ def test_pipeline_winner_has_best_r2(sample_df):
     X, y, names, _ = build_feature_matrix(
         sample_df, ["pressure", "temperature"], "scrap_rate"
     )
-    results = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
+    results, _ = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
     winner = next(r for r in results if r.is_winner)
     for r in results:
         assert winner.metrics.r2 >= r.metrics.r2

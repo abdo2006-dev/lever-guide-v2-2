@@ -117,14 +117,23 @@ def _build_artifacts(bundle: AnalysisBundle, df: pd.DataFrame, roles: dict[str, 
         ),
         Artifact(
             artifact_id="dag_validation",
-            title="DAG Validation",
+            title="Causal Graph",
             kind="dag",
             text="\n".join([
-                f"Valid DAG: {bundle.dag_validation.valid}",
+                f"Structurally valid (acyclic, all nodes are real columns): "
+                f"{bundle.dag_validation.valid}. This says nothing about whether "
+                f"the graph is scientifically correct.",
+                f"Graph source: {bundle.dag_validation.dag_source}. No causal "
+                f"graph was discovered from data.",
+                *([bundle.dag_validation.graph_assumption]
+                  if bundle.dag_validation.graph_assumption else []),
                 *[f"Warning: {w}" for w in bundle.dag_validation.warnings],
                 *[f"Error: {e}" for e in bundle.dag_validation.errors],
             ]),
-            metadata={"valid": bundle.dag_validation.valid},
+            metadata={
+                "structurally_valid": bundle.dag_validation.valid,
+                "dag_source": bundle.dag_validation.dag_source,
+            },
         ),
     ]
 
@@ -150,38 +159,81 @@ def _build_artifacts(bundle: AnalysisBundle, df: pd.DataFrame, roles: dict[str, 
         metadata={"best_model": bundle.best_model},
     ))
 
-    causal_lines = []
+    # The Copilot answers only from these artifacts, so their wording *is* the
+    # Copilot's wording. Overstatements here become overstatements there.
+    causal_lines = [
+        "Result type: adjusted observational effect estimate. These are OLS "
+        "coefficients under an assumed causal graph, not proven causes; "
+        "interpretation depends on that graph and on there being no important "
+        "unmeasured confounding.",
+    ]
     for effect in bundle.causal:
         causal_lines.append(
             f"{effect.feature}: beta_per_sd={_compact_float(effect.effect_per_std)}, "
             f"raw_effect={_compact_float(effect.effect_raw)}, p={_compact_float(effect.p_value)}, "
-            f"ci=[{_compact_float(effect.conf_int_lo)}, {_compact_float(effect.conf_int_hi)}], "
-            f"evidence={effect.evidence_strength}, adjusted_for={', '.join(effect.adjusted_for) or 'none'}, "
+            f"ci=[{_compact_float(effect.conf_int_lo)}, {_compact_float(effect.conf_int_hi)}] "
+            f"({effect.interval_method}), interval_excludes_zero={effect.interval_excludes_zero}, "
+            f"evidence={effect.evidence_strength}, estimand={effect.estimand}, "
+            f"adjusted_for={', '.join(effect.adjusted_for) or 'none'} "
+            f"(source: {effect.adjustment_set_source}), "
             f"warning={effect.warning or 'none'}"
         )
     artifacts.append(Artifact(
         artifact_id="causal_findings",
-        title="Causal Findings",
+        title="Adjusted Effect Estimates",
         kind="causal",
-        text="\n".join(causal_lines) or "No causal effects were computed.",
-        metadata={"target": bundle.target},
+        text="\n".join(causal_lines),
+        metadata={"target": bundle.target, "result_type": "adjusted_effect_estimate"},
     ))
 
-    intervention_lines = []
+    intervention_lines = [
+        "Result type: predictive what-if simulation. Each line modifies one "
+        "model input and compares predictions; it is not automatically a causal "
+        "intervention estimate. Only entries with status=eligible are offered as "
+        "candidate actions — the rest are diagnostics and state why.",
+    ]
     for iv in bundle.interventions:
+        if iv.expected_kpi_change_lo is None or iv.expected_kpi_change_hi is None:
+            interval = f"interval=none ({iv.uncertainty_status})"
+        else:
+            interval = (
+                f"interval=[{_compact_float(iv.expected_kpi_change_lo)}, "
+                f"{_compact_float(iv.expected_kpi_change_hi)}] ({iv.interval_method})"
+            )
+        rank = f"Rank {iv.rank}" if iv.rank else "Unranked"
         intervention_lines.append(
-            f"Rank {iv.rank} {iv.feature}: direction={iv.direction}, suggested_value={_compact_float(iv.suggested_value)}, "
-            f"expected_change={_compact_float(iv.expected_kpi_change)} ({_compact_float(iv.expected_kpi_change_pct)}%), "
-            f"evidence={iv.evidence_type}/{iv.evidence_strength}. Rationale: {iv.rationale} "
+            f"{rank} {iv.feature}: status={iv.status} ({iv.status_reason}) "
+            f"direction={iv.direction}, suggested_value={_compact_float(iv.suggested_value)}, "
+            f"simulated_change={_compact_float(iv.expected_kpi_change)} "
+            f"({_compact_float(iv.expected_kpi_change_pct)}%), {interval}, "
+            f"support={iv.support_status}, adjusted_estimate={iv.adjustment_support}, "
+            f"strength={iv.evidence_strength}. Rationale: {iv.rationale} "
             f"Tradeoff: {iv.tradeoff} Caveat: {iv.caveat}"
         )
     artifacts.append(Artifact(
         artifact_id="interventions",
-        title="Intervention Recommendations",
+        title="Predictive What-If Simulations",
         kind="intervention",
-        text="\n".join(intervention_lines) or "No interventions were generated.",
-        metadata={"target": bundle.target},
+        text="\n".join(intervention_lines),
+        metadata={"target": bundle.target, "result_type": "predictive_what_if"},
     ))
+
+    model_status_lines = [
+        f"{s.display_name}: {s.status}" + (f" — {s.detail}" if s.detail else "")
+        for s in bundle.model_statuses
+    ]
+    if model_status_lines:
+        artifacts.append(Artifact(
+            artifact_id="model_status",
+            title="Model Run Status",
+            kind="model",
+            text=(
+                "Status of every configured model. A model listed as "
+                "unavailable_dependency or training_failed did not contribute to "
+                "the comparison.\n" + "\n".join(model_status_lines)
+            ),
+            metadata={"n_configured": len(bundle.model_statuses)},
+        ))
 
     corr_lines = [
         f"{c.feature_a} vs {c.feature_b}: correlation={_compact_float(c.correlation)}"

@@ -1,14 +1,19 @@
 """
-DAG-aware causal analysis.
+Adjusted observational effect estimation.
 
-For each controllable variable, estimates the adjusted effect on the target
-using back-door adjusted OLS (statsmodels). Adjustment set is derived from
-the user-supplied DAG via NetworkX.
+For each lever, estimates the effect on the target using OLS with a back-door
+adjustment set. Where a curated ontology declares a per-lever adjustment set, it
+is used verbatim; otherwise the set is derived from the graph.
 
-This is NOT full structural causal modelling. These are adjusted coefficients
-from observational data — unobserved confounders may bias estimates.
+These are **adjusted observational effect estimates**, not proven causes. They
+are valid only if the assumed graph is correct and there is no important
+unmeasured confounding. This is not full structural causal modelling, and no
+identification search is performed beyond the declared or derived set.
 """
 from __future__ import annotations
+
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
@@ -16,9 +21,20 @@ from app.schemas import CausalEffect, DagEdge
 from app.utils.dag import adjustment_set, build_dag
 
 
-def _evidence_strength(p_value: float, n: int, n_adj: int) -> str:
+def _evidence_strength(
+    p_value: float, n: int, n_adj: int, interval_excludes_zero: bool
+) -> str:
+    """
+    Strength of the *estimate*, not of a causal claim.
+
+    An interval that includes zero caps the rating at "weak" regardless of the
+    p-value. Rating on p alone labelled six of eight demo levers "strong" at
+    n = 2,000, including one whose interval crossed zero.
+    """
     if n < 100 or n_adj > n * 0.5:
         return "insufficient"
+    if not interval_excludes_zero:
+        return "weak" if p_value < 0.15 else "insufficient"
     if p_value < 0.01:
         return "strong"
     if p_value < 0.05:
@@ -36,15 +52,28 @@ def run_causal_analysis(
     mediators: list[str],
     context: list[str],
     dag_edges: list[DagEdge],
+    declared_adjustment_sets: Optional[dict[str, list[str]]] = None,
+    causal_roles: Optional[dict[str, str]] = None,
+    set_notes: Optional[dict[str, str]] = None,
 ) -> list[CausalEffect]:
     """
-    For each controllable variable fit:
+    For each lever fit:
         y ~ cause + adjustment_set
     and report the adjusted coefficient on 'cause'.
-    All numeric features are standardised so β is interpretable as
-    "effect of +1 SD change on target (also standardised)".
+
+    All numeric columns are standardised, so β is "change in standard deviations
+    of the target per +1 SD of the lever".
+
+    `declared_adjustment_sets` — per-lever sets from a curated ontology. When a
+    lever has one it is used verbatim and the estimate says so; otherwise the
+    graph-derived set is used and the estimate says that instead. A declared set
+    is never merged with the derived one: mixing a domain claim with a heuristic
+    would make the reported set untraceable.
     """
     G = build_dag(dag_edges)
+    declared_adjustment_sets = declared_adjustment_sets or {}
+    causal_roles = causal_roles or {}
+    set_notes = set_notes or {}
     effects: list[CausalEffect] = []
 
     # Standardise numeric columns once
@@ -66,11 +95,22 @@ def run_causal_analysis(
         if not pd.api.types.is_numeric_dtype(df[cause]):
             continue
 
-        adj = adjustment_set(
-            cause=cause, outcome=target, G=G,
-            confounders=confounders, mediators=mediators, context=context,
-        )
-        adj = {c for c in adj if c in df.columns}
+        declared = declared_adjustment_sets.get(cause)
+        if declared is not None:
+            adj = {c for c in declared if c in df.columns}
+            adj_source = "declared_domain_dag"
+        else:
+            adj = adjustment_set(
+                cause=cause, outcome=target, G=G,
+                confounders=confounders, mediators=mediators, context=context,
+            )
+            adj = {c for c in adj if c in df.columns}
+            adj_source = "derived_from_graph"
+
+        # Belt and braces: whatever the source, a mediator never survives into a
+        # total-effect adjustment set.
+        dropped_mediators = sorted(adj & set(mediators))
+        adj -= set(mediators)
 
         reg_cols = [cause] + sorted(adj)
         reg_df   = df_std[[target] + reg_cols].dropna()
@@ -106,12 +146,38 @@ def run_causal_analysis(
         sd_target = std_map.get(target, 1.0)
         effect_raw = beta * (sd_target / sd_cause) if sd_cause > 0 else beta
 
-        strength = _evidence_strength(p, n, len(adj))
+        interval_excludes_zero = (ci_lo > 0) or (ci_hi < 0)
+        strength = _evidence_strength(p, n, len(adj), interval_excludes_zero)
+
         warning: str | None = None
         if n < 100:
             warning = f"Small sample (n={n}) — treat this estimate cautiously."
-        elif p >= 0.15:
-            warning = "Effect is not statistically significant at α=0.15."
+        elif not interval_excludes_zero:
+            warning = (
+                "The 95% interval includes zero — this estimate does not "
+                "establish a direction."
+            )
+
+        notes: list[str] = []
+        if adj_source == "declared_domain_dag":
+            notes.append(
+                "Adjustment set declared by the dataset ontology, not derived "
+                "from column types."
+            )
+        else:
+            notes.append(
+                "Adjustment set derived from the assumed graph and the roles you "
+                "assigned. No back-door search was performed."
+            )
+        if cause in set_notes:
+            notes.append(set_notes[cause])
+        if dropped_mediators:
+            notes.append(
+                "Excluded from the adjustment set because they are mediators: "
+                + ", ".join(dropped_mediators)
+                + ". Conditioning on them would turn a total effect into a "
+                "direct effect."
+            )
 
         effects.append(CausalEffect(
             feature=cause,
@@ -122,10 +188,19 @@ def run_causal_analysis(
             p_value=p,
             conf_int_lo=ci_lo,
             conf_int_hi=ci_hi,
+            interval_method="ols_analytic_homoskedastic",
             adjusted_for=sorted(adj),
+            adjustment_set_source=adj_source,
+            estimand=(
+                f"total effect of {cause} on {target}, under the assumed graph"
+            ),
+            causal_role=causal_roles.get(cause),
             controllable=True,
+            n_observations=n,
             evidence_strength=strength,
+            interval_excludes_zero=interval_excludes_zero,
             warning=warning,
+            notes=notes,
         ))
 
     return sorted(effects, key=lambda e: abs(e.t_stat), reverse=True)
