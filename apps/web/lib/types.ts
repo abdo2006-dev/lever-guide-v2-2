@@ -3,16 +3,63 @@
 export type ColumnRole =
   | "outcome"
   | "controllable"
+  | "planning_lever"
   | "confounder"
   | "mediator"
   | "context"
   | "identifier"
-  | "ignore";
+  | "ignore"
+  | "unassigned";
 
 export type ColumnKind = "numeric" | "categorical" | "datetime" | "text";
 export type Task = "regression";
+export type AnalysisMode = "causal" | "descriptive_predictive";
 export type EvidenceStrength = "strong" | "moderate" | "weak" | "insufficient";
-export type EvidenceType = "causal" | "predictive" | "mixed";
+
+/**
+ * What kind of claim a result is. These three are never interchangeable:
+ *  - association: a marginal relationship, no adjustment, no causal claim
+ *  - adjusted_effect_estimate: observational effect under an assumed causal graph
+ *  - predictive_what_if: model inputs changed and predictions compared
+ */
+export type ResultType =
+  | "association"
+  | "adjusted_effect_estimate"
+  | "predictive_what_if";
+
+export type IntervalMethod =
+  | "ols_analytic_homoskedastic"
+  | "row_bootstrap_fixed_model";
+
+export type InterventionStatus =
+  | "eligible"
+  | "exploratory"
+  | "unsupported"
+  | "infeasible"
+  | "conflicting_evidence";
+
+export type SupportStatus =
+  | "within_observed"
+  | "outside_observed_within_declared"
+  | "outside_declared"
+  | "unknown";
+
+export type AdjustmentSupport = "aligned" | "conflicting" | "inconclusive" | "none";
+
+export const RESULT_TYPE_LABEL: Record<ResultType, string> = {
+  association: "Association",
+  adjusted_effect_estimate: "Adjusted observational effect estimate",
+  predictive_what_if: "Predictive what-if simulation",
+};
+
+export const RESULT_TYPE_NOTE: Record<ResultType, string> = {
+  association:
+    "This is a marginal association. It is not adjusted for anything and carries no causal claim.",
+  adjusted_effect_estimate:
+    "Interpretation depends on the selected causal graph and assumptions, including no important unmeasured confounding.",
+  predictive_what_if:
+    "This modifies model inputs and compares predictions. It is not automatically a causal intervention estimate.",
+};
 
 export interface TopValue {
   value: string;
@@ -48,9 +95,12 @@ export interface DagEdge {
 }
 
 export interface DagValidationResult {
+  /** Structurally well-formed (acyclic, known nodes) — not "scientifically proven". */
   valid: boolean;
   errors: string[];
   warnings: string[];
+  dag_source: "user_supplied" | "declared_domain_ontology" | "assumed_from_roles";
+  graph_assumption?: string | null;
 }
 
 // ── Analysis request ──────────────────────────────────────────────────────────
@@ -61,6 +111,7 @@ export interface AnalysisRequest {
   target: string;
   task: Task;
   improve_direction: "decrease" | "increase";
+  analysis_mode: AnalysisMode;
   column_roles: Record<string, ColumnRole>;
   dag_edges: DagEdge[];
   random_seed?: number;
@@ -116,6 +167,7 @@ export interface PredictiveResult {
 // ── Causal ────────────────────────────────────────────────────────────────────
 
 export interface CausalEffect {
+  result_type: ResultType;
   feature: string;
   effect_per_std: number;
   effect_raw: number;
@@ -124,15 +176,31 @@ export interface CausalEffect {
   p_value: number;
   conf_int_lo: number;
   conf_int_hi: number;
+  interval_method: IntervalMethod;
   adjusted_for: string[];
+  adjustment_set_source: "declared_domain_dag" | "derived_from_graph";
+  estimand: string;
+  causal_role?: string | null;
   controllable: boolean;
+  n_observations: number;
   evidence_strength: EvidenceStrength;
+  interval_excludes_zero: boolean;
+  interpretation_note: string;
   warning?: string;
+  notes: string[];
 }
 
-// ── Interventions ─────────────────────────────────────────────────────────────
+// ── Predictive what-if simulations ────────────────────────────────────────────
+
+export interface FeasibilityCheck {
+  check: string;
+  passed: boolean;
+  detail: string;
+}
 
 export interface Intervention {
+  result_type: ResultType;
+  /** 0 means unranked — only `eligible` results are ranked. */
   rank: number;
   feature: string;
   direction: "increase" | "decrease";
@@ -144,17 +212,30 @@ export interface Intervention {
   delta_pct: number;
   expected_kpi_change: number;
   expected_kpi_change_pct: number;
+  /** Null when no interval could be computed — never a placeholder value. */
+  expected_kpi_change_lo?: number | null;
+  expected_kpi_change_hi?: number | null;
+  interval_method?: IntervalMethod | null;
+  uncertainty_status: string;
+  status: InterventionStatus;
+  status_reason: string;
+  support_status: SupportStatus;
+  feasibility_checks: FeasibilityCheck[];
   evidence_strength: EvidenceStrength;
-  evidence_type: EvidenceType;
+  adjustment_support: AdjustmentSupport;
+  simulation_model: string;
+  simulation_evaluation: string;
   tradeoff: string;
   rationale: string;
   assumptions: string[];
   caveat: string;
+  interpretation_note: string;
 }
 
 // ── EDA ───────────────────────────────────────────────────────────────────────
 
 export interface CorrelationPair {
+  result_type: ResultType;
   feature_a: string;
   feature_b: string;
   correlation: number;
@@ -191,15 +272,50 @@ export interface ExecutiveSummary {
 
 // ── Bundle ────────────────────────────────────────────────────────────────────
 
+export type ModelRunStatus =
+  | "succeeded"
+  | "unavailable_dependency"
+  | "training_failed"
+  | "skipped_by_configuration";
+
+export interface ModelStatus {
+  model: ModelKey;
+  display_name: string;
+  status: ModelRunStatus;
+  detail?: string | null;
+}
+
+export interface AnalysisProvenance {
+  analysis_mode: AnalysisMode;
+  ontology_id?: string | null;
+  ontology_version?: string | null;
+  graph_assumption?: string | null;
+  dag_source: string;
+  adjustment_set_source: string;
+  effect_estimator: string;
+  effect_interval_method?: string | null;
+  simulation_model?: string | null;
+  simulation_evaluation?: string | null;
+  simulation_interval_method?: string | null;
+  n_rows_supplied: number;
+  n_rows_analysed: number;
+  sampling_note?: string | null;
+  train_eval_strategy: string;
+  random_seed: number;
+  column_roles: Record<string, string>;
+}
+
 export interface AnalysisBundle {
   request_id: string;
   dataset_name: string;
   target: string;
   task: Task;
+  analysis_mode: AnalysisMode;
   row_count: number;
   feature_count: number;
   controllable_count: number;
   predictive: PredictiveResult[];
+  model_statuses: ModelStatus[];
   best_model: ModelKey;
   causal: CausalEffect[];
   interventions: Intervention[];
@@ -207,6 +323,7 @@ export interface AnalysisBundle {
   distributions: FeatureDistribution[];
   executive: ExecutiveSummary;
   dag_validation: DagValidationResult;
+  provenance?: AnalysisProvenance | null;
   warnings: string[];
   runtime_seconds: number;
 }

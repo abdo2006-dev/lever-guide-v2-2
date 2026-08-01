@@ -1,43 +1,14 @@
 import Papa from "papaparse";
 import type { ColumnKind, ColumnMeta, ColumnRole, ParsedDataset } from "./types";
+import { DEMO_ONTOLOGY } from "./ontology";
 
 // ── Demo role assignments ─────────────────────────────────────────────────────
-export const DEMO_TARGET = "scrap_rate_pct";
-export const DEMO_ROLES: Record<string, ColumnRole> = {
-  scrap_rate_pct:             "outcome",
-  barrel_temperature_c:       "controllable",
-  mold_temperature_c:         "controllable",
-  injection_pressure_bar:     "controllable",
-  hold_pressure_bar:          "controllable",
-  screw_speed_rpm:            "controllable",
-  cooling_time_s:             "controllable",
-  clamp_force_kn:             "controllable",
-  shot_size_g:                "controllable",
-  ambient_temperature_c:      "confounder",
-  ambient_humidity_pct:       "confounder",
-  resin_moisture_pct:         "confounder",
-  resin_batch_quality_index:  "confounder",
-  dryer_dewpoint_c:           "confounder",
-  cavity_count:               "context",
-  product_variant:            "context",
-  operator_experience_level:  "context",
-  operator_shift:             "context",
-  tool_wear_index:            "context",
-  calibration_drift_index:    "context",
-  maintenance_days_since_last:"context",
-  cycle_time_s:               "mediator",
-  part_weight_g:              "mediator",
-  timestamp:                  "identifier",
-  plant_id:                   "identifier",
-  machine_id:                 "identifier",
-  mold_id:                    "identifier",
-  resin_lot_id:               "identifier",
-  defect_type:                "ignore",
-  scrap_count:                "ignore",
-  parts_produced:             "ignore",
-  energy_kwh_interval:        "ignore",
-  pass_fail_flag:             "ignore",
-};
+// Derived from the generated ontology, never hand-maintained. The backend's
+// Python ontology is authoritative; `apps/api/scripts/export_ontology.py`
+// regenerates the JSON and a backend test fails if the two drift apart.
+export const DEMO_TARGET = DEMO_ONTOLOGY.target;
+export const DEMO_ROLES: Record<string, ColumnRole> =
+  DEMO_ONTOLOGY.column_roles as Record<string, ColumnRole>;
 
 // ── Type inference ────────────────────────────────────────────────────────────
 function inferKind(values: unknown[]): ColumnKind {
@@ -89,12 +60,20 @@ function buildColumnMeta(
   return meta;
 }
 
+/**
+ * Default role for a column of an uploaded dataset.
+ *
+ * Identifiers and free text are recognised structurally, which is a claim about
+ * the *format* of a column. Everything else is left `unassigned`: being numeric
+ * is not evidence that a column confounds anything, and silently calling it a
+ * confounder made the app assert a causal role the user never gave it.
+ */
 function inferDefaultRole(name: string, kind: ColumnKind): ColumnRole {
   if (kind === "datetime") return "identifier";
   if (kind === "text") return "ignore";
   const l = name.toLowerCase();
   if (l.includes("id") || l === "timestamp" || l.includes("_id")) return "identifier";
-  return "confounder";
+  return "unassigned";
 }
 
 // ── Parse CSV text → ParsedDataset ────────────────────────────────────────────
