@@ -1,1 +1,0 @@
-export { EdaTab } from "./ExecutiveTab";
