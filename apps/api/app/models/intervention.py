@@ -69,9 +69,14 @@ def _tradeoff(feature: str, direction: str) -> str:
     }
     return lookup.get(
         (direction, feature),
-        f"Monitor downstream effects of {direction}ing {feature}. "
+        f"Monitor downstream effects of {_gerund(direction)} {feature}. "
         "This trade-off is not quantified.",
     )
+
+
+def _gerund(direction: str) -> str:
+    """'decrease' -> 'decreasing'. The naive f'{direction}ing' gave 'decreaseing'."""
+    return direction[:-1] + "ing" if direction.endswith("e") else direction + "ing"
 
 
 def _evidence_strength(
@@ -122,12 +127,12 @@ def _adjustment_support(
     if outcome_moves == improve_direction:
         return "aligned", (
             f"The adjusted estimate (β={beta:+.3f}/SD) points the same way: "
-            f"{direction[:-1]}ing this lever is estimated to {improve_direction} "
+            f"{_gerund(direction)} this lever is estimated to {improve_direction} "
             "the outcome."
         )
     return "conflicting", (
         f"The adjusted estimate (β={beta:+.3f}/SD) points the other way — it "
-        f"implies {direction[:-1]}ing this lever would {outcome_moves} the "
+        f"implies {_gerund(direction)} this lever would {outcome_moves} the "
         "outcome, not "
         f"{improve_direction} it."
     )
