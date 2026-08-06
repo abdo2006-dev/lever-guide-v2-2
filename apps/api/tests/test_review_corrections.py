@@ -293,32 +293,71 @@ def test_no_client_side_filter_would_need_to_hide_a_status_record(demo_bundle):
         assert iv["status"] in known
 
 
-def test_intervention_engine_never_drops_a_lever_that_improves_in_neither_direction():
+def test_api_reports_unsupported_lever_when_neither_direction_improves(
+    client, monkeypatch,
+):
     """
-    Unit-level regression for the root cause: a lever whose predictive
-    simulation finds no improving direction in either sign used to be dropped
-    via a silent `continue`. It must now come back with an explicit
-    'unsupported' status.
+    Regression for the former silent `continue`: run the complete endpoint with
+    a deterministic simulator where changing the lever up or down cannot lower
+    the outcome. The causal estimate remains aligned, so `unsupported` here is
+    specifically the no-improving-direction outcome rather than another gate.
     """
-    from app.models.intervention import run_intervention_engine
+    class NoImprovementRegressor:
+        predicted_means: list[float] = []
 
-    rng = np.random.default_rng(7)
-    n = 200
-    # A lever with a strong QUADRATIC relationship to the outcome: both a +1SD
-    # and a -1SD shift from the mean move the outcome the same (wrong) way,
-    # so neither direction the engine tries can improve a "decrease" goal.
-    lever = rng.normal(0, 1, n)
-    outcome = lever**2 + rng.normal(0, 0.1, n)
-    df = pd.DataFrame({"lever": lever, "outcome": outcome})
+        def __init__(self, *args, **kwargs):
+            pass
 
-    interventions = run_intervention_engine(
-        df=df, target="outcome", feature_names=["lever"], controllable=["lever"],
-        causal_effects=[], improve_direction="decrease", random_seed=42,
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            # The data below contain only -1 and +1. Baseline predictions and
+            # both clipped +/- 1 SD simulations are therefore all 1.0: neither
+            # proposed direction improves a "decrease" target.
+            prediction = np.square(X[:, 0])
+            type(self).predicted_means.append(float(prediction.mean()))
+            return prediction
+
+    monkeypatch.setattr(
+        "app.models.intervention.GradientBoostingRegressor",
+        NoImprovementRegressor,
     )
-    assert len(interventions) == 1, "the lever must not vanish"
-    assert interventions[0].feature == "lever"
-    assert interventions[0].status != "eligible"
-    assert interventions[0].status_reason
+
+    n = 200
+    lever = np.tile([-1.0, 1.0], n // 2)
+    # This gives the adjusted estimator a clearly negative, aligned effect for
+    # the selected increase direction. It prevents another status gate from
+    # masking the no-improving-direction branch under test.
+    df = pd.DataFrame({
+        "outcome": -lever,
+        "lever": lever,
+        "constant_confounder": ["only_level"] * n,
+    })
+    resp = client.post("/api/analyze", json=_payload(
+        df.to_csv(index=False),
+        {"lever": "controllable", "constant_confounder": "confounder"},
+    ))
+    assert resp.status_code == 200, resp.text
+    bundle = resp.json()
+    _assert_no_non_finite(bundle)
+
+    # predict() is called for the baseline, then the increase and decrease
+    # simulations. Both proposed directions have the same mean prediction as
+    # baseline, so neither is an improvement for a decrease goal.
+    assert NoImprovementRegressor.predicted_means == pytest.approx([1.0, 1.0, 1.0])
+
+    iv = _intervention(bundle, "lever")
+    assert iv is not None, "the lever must not vanish"
+    assert iv["status"] == "unsupported"
+    assert iv["rank"] == 0
+    assert "Neither increasing nor decreasing lever" in iv["status_reason"]
+    assert iv["status_reason"]
+    assert iv["feature"] not in {
+        candidate["feature"]
+        for candidate in bundle["interventions"]
+        if candidate["status"] == "eligible"
+    }
 
 
 # ── Correction 3: screw-speed documentation ──────────────────────────────────
