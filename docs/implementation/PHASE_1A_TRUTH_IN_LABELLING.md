@@ -575,7 +575,7 @@ failures to distinguish from regressions — the baseline suite was fully green.
    | Specification | Rows | β (p.p./SD) | 95% interval | Excludes zero |
    |---|---|---|---|---|
    | Declared set, seed 42 (shipped demo) | 2,000 | −0.126 | [−0.190, −0.061] | yes |
-   | Declared set, seed 1 | 2,000 | −0.121 | [−0.184, −0.057] | yes |
+   | Declared set, seed 1 | 2,000 | −0.124 | [−0.189, −0.059] | yes |
    | Declared set, seed 7 | 2,000 | −0.136 | [−0.201, −0.072] | yes |
    | Declared set, **full dataset** | **5,000** | **−0.132** | [−0.173, −0.091] | yes |
    | Declared set + `product_variant`, seed 42 | 2,000 | +0.015 | [−0.050, +0.081] | no |
@@ -583,7 +583,7 @@ failures to distinguish from regressions — the baseline suite was fully green.
    | Source study, published (full FE) | 5,000 | +0.002 | [−0.037, +0.045] | no |
 
    The full 5,000-row dataset gives −0.132, statistically indistinguishable
-   from every 2,000-row seed tried (−0.121 to −0.136). **Sub-sampling is not
+   from every 2,000-row seed tried (−0.124 to −0.137). **Sub-sampling is not
    the driver of this discrepancy and the earlier claim that it was is
    withdrawn.**
 
@@ -775,7 +775,7 @@ broader analytical-core work deferred to Phase 2.
    * Every numeric field is validated finite immediately before it would be
      returned; a result that is still non-finite is withheld with a reason
      rather than serialised, never replaced with a fabricated number.
-   * See `tests/test_scientific_safety.py` for behavioural coverage,
+   * See `apps/api/tests/test_review_corrections.py` for behavioural coverage,
      including the exact crash reproduction above turned into a regression
      test.
 
@@ -795,7 +795,10 @@ broader analytical-core work deferred to Phase 2.
    `conflicting_evidence` rather than `unsupported` — its adjusted estimate is
    preserved and shown, no direction is asserted, and it appears in "Assessed
    and set aside", never in the ranked list. See
-   `tests/test_scientific_safety.py::test_every_configured_lever_gets_an_intervention_status`.
+   `apps/api/tests/test_review_corrections.py::test_api_reports_unsupported_lever_when_neither_direction_improves`
+   for the generic regression, and
+   `apps/api/tests/test_review_corrections.py::test_screw_speed_rpm_appears_with_an_explicit_non_ranked_status`
+   for the demo lever.
 
 3. **The screw-speed documentation blamed the wrong thing.** §8.1 previously
    attributed the `screw_speed_rpm` discrepancy primarily to the 2,000-row
@@ -818,8 +821,8 @@ propagation) or any of the other Medium/Low findings from the same review.
 `mold_temperature_c`'s adjustment set, the mediator-exclusion guarantee,
 `shot_size_g`'s infeasible status, `hold_pressure_bar`'s non-primary status,
 optional-model visibility, generic-upload role defaults, and the
-association/adjusted/predictive result-type distinction were all confirmed
-unchanged by the new tests in `tests/test_scientific_safety.py`.
+   association/adjusted/predictive result-type distinction were all confirmed
+   unchanged by the existing `apps/api/tests/test_scientific_safety.py` suite.
 
 To regenerate the before/after numbers in §6, check out `2bd854f` into a
 worktree and post the demo CSV to `/api/analyze` with that commit's
