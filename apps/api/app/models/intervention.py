@@ -19,6 +19,7 @@ is information, not noise.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import numpy as np
@@ -216,7 +217,9 @@ def run_intervention_engine(
         j = feat_idx[feat]
         col_vals = df_model[feat]
         cur_mean = float(col_vals.mean())
-        cur_std = float(col_vals.std()) or 1.0
+        raw_std = float(col_vals.std())
+        is_constant = raw_std == 0.0
+        cur_std = raw_std or 1.0
         p10 = float(col_vals.quantile(0.1))
         p90 = float(col_vals.quantile(0.9))
 
@@ -233,24 +236,33 @@ def run_intervention_engine(
         if lo_bound > hi_bound:  # declared and observed do not overlap
             lo_bound, hi_bound = obs_lo, obs_hi
 
-        best = None
+        # Simulate both directions unconditionally. A lever that never improves
+        # the KPI in either direction is not discarded here — every configured
+        # lever gets an explicit status record below, never silence.
+        tried: dict[str, tuple[float, float, np.ndarray]] = {}
         for sign, direction in [(+1, "increase"), (-1, "decrease")]:
             target_val = float(np.clip(cur_mean + sign * cur_std, lo_bound, hi_bound))
             shifted = X.copy()
             shifted[:, j] = target_val
             shifted_pred = gbr.predict(shifted)
             sim_impact = float(np.mean(shifted_pred)) - base_mean
+            tried[direction] = (target_val, sim_impact, shifted_pred)
 
-            improves = (
-                (improve_direction == "decrease" and sim_impact < 0)
-                or (improve_direction == "increase" and sim_impact > 0)
-            )
-            if improves and (best is None or abs(sim_impact) > abs(best[2])):
-                best = (target_val, direction, sim_impact, shifted_pred)
-
-        if best is None:
-            continue
-        suggested, direction, sim_impact, shifted_pred = best
+        improving = {
+            d: v for d, v in tried.items()
+            if (improve_direction == "decrease" and v[1] < 0)
+            or (improve_direction == "increase" and v[1] > 0)
+        }
+        no_improving_direction = not improving
+        if improving:
+            direction = max(improving, key=lambda d: abs(improving[d][1]))
+        else:
+            # Neither direction moves the KPI the way the user wants. Report it
+            # anyway, using the direction whose predicted change is smallest in
+            # magnitude as the representative one — the status below makes
+            # clear that no action is actually offered.
+            direction = min(tried, key=lambda d: abs(tried[d][1]))
+        suggested, sim_impact, shifted_pred = tried[direction]
 
         causal_row = causal_map.get(feat)
         support, support_note = _adjustment_support(causal_row, direction, improve_direction)
@@ -273,6 +285,13 @@ def run_intervention_engine(
             else:
                 status = "exploratory"
             reason = blocker
+        elif is_constant:
+            status = "unsupported"
+            reason = (
+                f"'{feat}' has no observed variation in the analysed data "
+                "(a single distinct value), so no change can be simulated for "
+                "it."
+            )
         elif spec is not None and spec.evidence_status == "conflicting":
             status = "conflicting_evidence"
             reason = (
@@ -293,6 +312,14 @@ def run_intervention_engine(
         elif support == "inconclusive":
             status = "exploratory"
             reason = support_note
+        elif no_improving_direction:
+            status = "unsupported"
+            reason = (
+                f"Neither increasing nor decreasing {feat} was estimated to "
+                f"{improve_direction} {target} (increase "
+                f"Δ={tried['increase'][1]:+.4g}, decrease "
+                f"Δ={tried['decrease'][1]:+.4g}). No action is offered."
+            )
         else:
             status = "eligible"
             reason = "Feasible, inside observed support, and consistent with the adjusted estimate."
@@ -309,6 +336,24 @@ def run_intervention_engine(
             uncertainty_status = "row_bootstrap_fixed_model"
 
         exp_kpi_pct = (sim_impact / abs(kpi_mean) * 100) if kpi_mean != 0 else 0.0
+
+        # Belt and braces: a GBR prediction on finite inputs cannot produce a
+        # non-finite value in practice, but never let one reach the API
+        # response if it somehow did. The record is not dropped — that would
+        # reintroduce silent disappearance — its simulated numbers are reset to
+        # the no-change baseline (which is finite by construction) and the
+        # status/reason make clear no simulation result is actually being
+        # asserted.
+        if not all(math.isfinite(v) for v in (suggested, sim_impact, exp_kpi_pct, cur_mean)):
+            status = "unsupported"
+            reason = (
+                f"The simulation for '{feat}' produced a non-finite value and "
+                "was withheld rather than reported."
+            )
+            suggested, sim_impact, exp_kpi_pct = cur_mean, 0.0, 0.0
+            ci_lo = ci_hi = None
+            interval_method = None
+            uncertainty_status = "not_computed: simulation produced a non-finite value"
 
         rationale = (
             f"Simulation: setting {feat} to {suggested:.4g} "
