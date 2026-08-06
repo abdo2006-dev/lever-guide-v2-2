@@ -17,8 +17,8 @@ from scipy import stats as scipy_stats
 
 from app.schemas import (
     AnalysisBundle, AnalysisProvenance, AnalysisRequest, ConfigurationProblem,
-    CorrelationPair, DistributionBucket, FeatureDistribution, ExecutiveSummary,
-    TopValue, CopilotAskRequest, CopilotAnswerResponse,
+    CorrelationPair, DistributionBucket, ExcludedColumn, FeatureDistribution,
+    ExecutiveSummary, TopValue, CopilotAskRequest, CopilotAnswerResponse,
 )
 from app.ontology import (
     INJECTION_MOULDING_ONTOLOGY, SOURCE_DEVIATIONS, resolve_ontology,
@@ -88,7 +88,7 @@ def _assign_roles(df: pd.DataFrame, column_roles: dict[str, str], target: str) -
 
 
 def _validate_configuration(
-    roles: dict[str, str], analysis_mode: str, target: str
+    df: pd.DataFrame, roles: dict[str, str], analysis_mode: str, target: str
 ) -> list[ConfigurationProblem]:
     """
     Independent server-side validation of the analysis configuration.
@@ -131,6 +131,27 @@ def _validate_configuration(
             ),
             columns=unassigned[:20],
         ))
+
+    if analysis_mode == "causal" and levers:
+        constant_levers = sorted(
+            c for c in levers
+            if c in df.columns and df[c].dropna().nunique() < 2
+        )
+        if len(constant_levers) == len(levers):
+            problems.append(ConfigurationProblem(
+                code="ALL_TREATMENTS_CONSTANT",
+                message=(
+                    "Every labelled treatment has a single distinct value in "
+                    "this data, so no intervention effect can be estimated for "
+                    "any of them."
+                ),
+                remedy=(
+                    "Choose a treatment column that varies, or check the data "
+                    "for a filtering bug — or switch to descriptive/predictive "
+                    "mode, which makes no causal claims and needs no treatment."
+                ),
+                columns=constant_levers,
+            ))
 
     return problems
 
@@ -175,18 +196,39 @@ def _coerce_and_validate_target(df: pd.DataFrame, target: str) -> pd.Series:
     if len(non_null) < 30:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Target column '{target}' must contain at least 30 numeric, non-missing rows "
-                "for regression analysis."
-            ),
+            detail={
+                "code": "TARGET_INSUFFICIENT_ROWS",
+                "message": (
+                    f"Target column '{target}' must contain at least 30 numeric, "
+                    "non-missing rows for regression analysis."
+                ),
+                "problems": [ConfigurationProblem(
+                    code="TARGET_INSUFFICIENT_ROWS",
+                    message=(
+                        f"'{target}' has fewer than 30 numeric, non-missing values."
+                    ),
+                    remedy="Choose a target column with at least 30 valid numeric rows.",
+                    columns=[target],
+                ).model_dump()],
+            },
         )
     if non_null.nunique() < 2:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Target column '{target}' must vary across rows. "
-                "Constant targets are not valid for regression analysis."
-            ),
+            detail={
+                "code": "CONSTANT_OUTCOME",
+                "message": (
+                    f"Target column '{target}' has a single distinct value. An "
+                    "outcome with no variation cannot be modelled or used to "
+                    "estimate an effect."
+                ),
+                "problems": [ConfigurationProblem(
+                    code="CONSTANT_OUTCOME",
+                    message=f"'{target}' does not vary across the analysed rows.",
+                    remedy="Choose a target column that varies, or check the data for a filtering bug.",
+                    columns=[target],
+                ).model_dump()],
+            },
         )
     return target_numeric
 
@@ -407,7 +449,7 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     unassigned   = [c for c, r in roles.items() if r == "unassigned"]
     levers = controllable + planning
 
-    problems = _validate_configuration(roles, req.analysis_mode, req.target)
+    problems = _validate_configuration(df, roles, req.analysis_mode, req.target)
     if problems:
         raise HTTPException(
             status_code=422,
@@ -502,6 +544,7 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
     # ── Adjusted effect estimates and what-if simulations ─────────────────
     causal_effects: list[Any] = []
     interventions: list[Any] = []
+    excluded_columns: list[ExcludedColumn] = []
 
     if req.analysis_mode == "causal":
         declared_sets: dict[str, list[str]] | None = None
@@ -516,7 +559,7 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
             causal_roles = {v.name: v.causal_role for v in ontology.variables}
             set_notes = dict(SOURCE_DEVIATIONS)
 
-        causal_effects = run_causal_analysis(
+        causal_effects, excluded_columns = run_causal_analysis(
             df=df,
             target=req.target,
             controllable=levers,
@@ -528,6 +571,13 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
             causal_roles=causal_roles,
             set_notes=set_notes,
         )
+        if excluded_columns:
+            warnings.append(
+                f"{len(excluded_columns)} column(s) were excluded from a fitted "
+                "adjustment set or rejected as a treatment because they have no "
+                "observed variation, or produced a non-finite estimate — see "
+                "the provenance panel for the column and the reason on each."
+            )
 
         interventions = run_intervention_engine(
             df=df,
@@ -600,6 +650,7 @@ async def analyze(req: AnalysisRequest) -> AnalysisBundle:
         ),
         random_seed=req.random_seed,
         column_roles=dict(roles),
+        excluded_columns=excluded_columns,
     )
 
     bundle = AnalysisBundle(

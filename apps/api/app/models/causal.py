@@ -12,13 +12,21 @@ identification search is performed beyond the declared or derived set.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from app.schemas import CausalEffect, DagEdge
+from app.schemas import CausalEffect, DagEdge, ExcludedColumn
 from app.utils.dag import adjustment_set, build_dag
+
+
+def _zero_variance(df: pd.DataFrame, column: str) -> bool:
+    """True if `column` has fewer than two distinct non-missing values."""
+    if column not in df.columns:
+        return False
+    return df[column].dropna().nunique() < 2
 
 
 def _evidence_strength(
@@ -55,7 +63,7 @@ def run_causal_analysis(
     declared_adjustment_sets: Optional[dict[str, list[str]]] = None,
     causal_roles: Optional[dict[str, str]] = None,
     set_notes: Optional[dict[str, str]] = None,
-) -> list[CausalEffect]:
+) -> tuple[list[CausalEffect], list[ExcludedColumn]]:
     """
     For each lever fit:
         y ~ cause + adjustment_set
@@ -69,12 +77,20 @@ def run_causal_analysis(
     graph-derived set is used and the estimate says that instead. A declared set
     is never merged with the derived one: mixing a domain claim with a heuristic
     would make the reported set untraceable.
+
+    Returns `(effects, excluded)`. A treatment with no observed variation has no
+    identifiable effect and is excluded rather than fit; a zero-variance
+    adjustment-set member is dropped from that lever's design matrix rather than
+    left in as a degenerate regressor. Either way the exclusion is recorded, not
+    silent. A fit that still comes out non-finite (e.g. too many adjusters for
+    too few rows) is withheld rather than reported.
     """
     G = build_dag(dag_edges)
     declared_adjustment_sets = declared_adjustment_sets or {}
     causal_roles = causal_roles or {}
     set_notes = set_notes or {}
     effects: list[CausalEffect] = []
+    excluded: list[ExcludedColumn] = []
 
     # Standardise numeric columns once
     df_std = df.copy()
@@ -95,6 +111,22 @@ def run_causal_analysis(
         if not pd.api.types.is_numeric_dtype(df[cause]):
             continue
 
+        # A treatment with no observed variation has no identifiable effect —
+        # fitting it anyway does not raise, but silently returns a fabricated
+        # near-zero coefficient for an unidentifiable parameter. Reject it
+        # explicitly instead.
+        if _zero_variance(df, cause):
+            excluded.append(ExcludedColumn(
+                column=cause,
+                scope="treatment",
+                lever=cause,
+                reason=(
+                    f"'{cause}' has a single observed value in this data, so no "
+                    "intervention effect can be estimated for it."
+                ),
+            ))
+            continue
+
         declared = declared_adjustment_sets.get(cause)
         if declared is not None:
             adj = {c for c in declared if c in df.columns}
@@ -111,6 +143,23 @@ def run_causal_analysis(
         # total-effect adjustment set.
         dropped_mediators = sorted(adj & set(mediators))
         adj -= set(mediators)
+
+        # A zero-variance adjuster contributes nothing and, encoded alongside
+        # the intercept, is a degenerate regressor. Drop it rather than let it
+        # ride into a design matrix it cannot inform.
+        dropped_zero_variance = sorted(c for c in adj if _zero_variance(df, c))
+        if dropped_zero_variance:
+            adj -= set(dropped_zero_variance)
+            for c in dropped_zero_variance:
+                excluded.append(ExcludedColumn(
+                    column=c,
+                    scope="adjustment_set",
+                    lever=cause,
+                    reason=(
+                        f"'{c}' has no observed variation in this sample and was "
+                        f"excluded from {cause}'s adjustment set."
+                    ),
+                ))
 
         reg_cols = [cause] + sorted(adj)
         reg_df   = df_std[[target] + reg_cols].dropna()
@@ -140,6 +189,25 @@ def run_causal_analysis(
         ci    = fit.conf_int()
         ci_lo = float(ci.loc[cause, 0])
         ci_hi = float(ci.loc[cause, 1])
+
+        # Belt and braces: a design matrix with too little identifying
+        # information (near-exhausted degrees of freedom, remaining
+        # collinearity pinv could not fully absorb) can produce a non-finite
+        # coefficient, standard error or interval. Never report or serialise
+        # one — withhold the estimate instead of fabricating a number.
+        if not all(math.isfinite(v) for v in (beta, se, t, p, ci_lo, ci_hi)):
+            excluded.append(ExcludedColumn(
+                column=cause,
+                scope="treatment",
+                lever=cause,
+                reason=(
+                    f"The adjusted model for '{cause}' produced a non-finite "
+                    "result — likely too little identifying information for "
+                    "the declared adjustment set relative to the sample size. "
+                    "The estimate was withheld rather than reported."
+                ),
+            ))
+            continue
 
         # Unstandardised effect (original KPI units per 1-unit change)
         sd_cause  = std_map.get(cause,  1.0)
@@ -178,6 +246,12 @@ def run_causal_analysis(
                 + ". Conditioning on them would turn a total effect into a "
                 "direct effect."
             )
+        if dropped_zero_variance:
+            notes.append(
+                "Excluded from the adjustment set because they have no "
+                "observed variation in this sample: "
+                + ", ".join(dropped_zero_variance) + "."
+            )
 
         effects.append(CausalEffect(
             feature=cause,
@@ -203,4 +277,4 @@ def run_causal_analysis(
             notes=notes,
         ))
 
-    return sorted(effects, key=lambda e: abs(e.t_stat), reverse=True)
+    return sorted(effects, key=lambda e: abs(e.t_stat), reverse=True), excluded

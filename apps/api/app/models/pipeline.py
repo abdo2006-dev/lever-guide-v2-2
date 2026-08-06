@@ -9,6 +9,8 @@ configured model reports a status, so "three models ran" is never displayed as
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -47,6 +49,19 @@ DISPLAY_NAMES: dict[str, str] = {
 def _truncate(detail: str, limit: int = 300) -> str:
     detail = " ".join(detail.split())
     return detail if len(detail) <= limit else detail[: limit - 1] + "…"
+
+
+def _require_finite_metrics(m: dict) -> None:
+    """
+    Raise if a metric came out non-finite (e.g. a near-singular OLS fit).
+
+    Caught by the caller's existing `except Exception` per model, so a
+    non-finite result is reported as `training_failed` with a reason rather
+    than reaching JSON serialisation.
+    """
+    bad = [k for k, v in m.items() if isinstance(v, (int, float)) and not math.isfinite(v)]
+    if bad:
+        raise ValueError(f"non-finite metric(s): {', '.join(bad)}")
 
 
 class _Skipped(Exception):
@@ -116,12 +131,19 @@ def run_predictive_pipeline(
         if run_cv and n > 100:
             cv = cross_val_score(LinearRegression(), X, y, cv=CV_FOLDS, scoring="r2")
             m["cv_r2_mean"] = float(cv.mean()); m["cv_r2_std"] = float(cv.std())
+        _require_finite_metrics(m)
         coefs = [
             Coefficient(feature=nm, coef=float(ols_fit.params[i]),
                         std_err=float(ols_fit.bse[i]), t_stat=float(ols_fit.tvalues[i]),
                         p_value=float(ols_fit.pvalues[i]), significant=bool(ols_fit.pvalues[i] < 0.05))
             for i, nm in enumerate(["(intercept)"] + feature_names)
         ]
+        if not all(
+            math.isfinite(c.coef) and math.isfinite(c.std_err)
+            and math.isfinite(c.t_stat) and math.isfinite(c.p_value)
+            for c in coefs
+        ):
+            raise ValueError("non-finite coefficient(s) — design matrix is degenerate for OLS")
         results.append(PredictiveResult(
             model="ols", display_name="OLS Regression", task=task,
             metrics=ModelMetrics(n_train=len(X_tr), n_test=len(X_te), **m),
@@ -143,6 +165,7 @@ def run_predictive_pipeline(
         if run_cv and n > 100:
             cv = cross_val_score(ridge, X, y, cv=CV_FOLDS, scoring="r2")
             m["cv_r2_mean"] = float(cv.mean()); m["cv_r2_std"] = float(cv.std())
+        _require_finite_metrics(m)
         results.append(PredictiveResult(
             model="ridge", display_name="Ridge Regression", task=task,
             metrics=ModelMetrics(n_train=len(X_tr), n_test=len(X_te), **m),
@@ -164,6 +187,7 @@ def run_predictive_pipeline(
         if run_cv and n > 200:
             cv = cross_val_score(rf, X, y, cv=CV_FOLDS, scoring="r2")
             m["cv_r2_mean"] = float(cv.mean()); m["cv_r2_std"] = float(cv.std())
+        _require_finite_metrics(m)
         results.append(PredictiveResult(
             model="rf", display_name="Random Forest", task=task,
             metrics=ModelMetrics(n_train=len(X_tr), n_test=len(X_te), **m),
@@ -192,6 +216,7 @@ def run_predictive_pipeline(
         xgb_m.fit(X_tr, y_tr, verbose=False)
         y_pred = xgb_m.predict(X_te)
         m = _metrics(y_te, y_pred, p)
+        _require_finite_metrics(m)
         results.append(PredictiveResult(
             model="xgb", display_name="XGBoost", task=task,
             metrics=ModelMetrics(n_train=len(X_tr), n_test=len(X_te), **m),
@@ -220,6 +245,7 @@ def run_predictive_pipeline(
         lgbm_m.fit(X_tr, y_tr)
         y_pred = lgbm_m.predict(X_te)
         m = _metrics(y_te, y_pred, p)
+        _require_finite_metrics(m)
         results.append(PredictiveResult(
             model="lgbm", display_name="LightGBM", task=task,
             metrics=ModelMetrics(n_train=len(X_tr), n_test=len(X_te), **m),

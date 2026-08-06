@@ -909,6 +909,22 @@ function ExecutiveTab({ exec, prov }: {
           {prov.graph_assumption && (
             <p className="text-xs text-muted-foreground mt-3 leading-relaxed">{prov.graph_assumption}</p>
           )}
+          {(prov.excluded_columns ?? []).length > 0 && (
+            <div className="mt-3 pt-3 border-t border-border/40">
+              <p className="font-medium text-foreground text-xs mb-1.5">
+                Columns excluded from a fitted model ({prov.excluded_columns.length})
+              </p>
+              <ul className="space-y-1">
+                {prov.excluded_columns.map((ex, i) => (
+                  <li key={i} className="text-xs text-muted-foreground leading-relaxed">
+                    <span className="font-mono text-foreground">{ex.column}</span>
+                    {ex.scope === "treatment" ? " (treatment)" : ` (adjuster for ${ex.lever})`}
+                    {" — "}{ex.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
       )}
     </div>

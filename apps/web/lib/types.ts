@@ -285,6 +285,14 @@ export interface ModelStatus {
   detail?: string | null;
 }
 
+/** A column dropped from a fitted design matrix, and why. Not a silent change. */
+export interface ExcludedColumn {
+  column: string;
+  scope: "treatment" | "adjustment_set";
+  lever: string;
+  reason: string;
+}
+
 export interface AnalysisProvenance {
   analysis_mode: AnalysisMode;
   ontology_id?: string | null;
@@ -303,6 +311,7 @@ export interface AnalysisProvenance {
   train_eval_strategy: string;
   random_seed: number;
   column_roles: Record<string, string>;
+  excluded_columns: ExcludedColumn[];
 }
 
 export interface AnalysisBundle {

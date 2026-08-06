@@ -171,7 +171,7 @@ def test_causal_analysis_runs(sample_df):
         DagEdge(source="pressure", target="scrap_rate"),
         DagEdge(source="temperature", target="scrap_rate"),
     ]
-    effects = run_causal_analysis(
+    effects, excluded = run_causal_analysis(
         df=sample_df,
         target="scrap_rate",
         controllable=["pressure", "temperature"],
@@ -181,6 +181,7 @@ def test_causal_analysis_runs(sample_df):
         dag_edges=edges,
     )
     assert isinstance(effects, list)
+    assert isinstance(excluded, list)
 
 
 def test_causal_analysis_excludes_mediators():
@@ -196,7 +197,7 @@ def test_causal_analysis_excludes_mediators():
         DagEdge(source="pressure", target="mediator"),
         DagEdge(source="mediator", target="outcome"),
     ]
-    effects = run_causal_analysis(
+    effects, _excluded = run_causal_analysis(
         df=df,
         target="outcome",
         controllable=["pressure"],
@@ -347,7 +348,9 @@ def test_analyze_rejects_non_numeric_target():
         "random_seed": 42,
     })
     assert resp.status_code == 422
-    assert "must contain at least 30 numeric" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert detail["code"] == "TARGET_INSUFFICIENT_ROWS"
+    assert "at least 30 numeric" in detail["message"]
 
 
 def test_analyze_rejects_constant_target():
@@ -369,7 +372,9 @@ def test_analyze_rejects_constant_target():
         "random_seed": 42,
     })
     assert resp.status_code == 422
-    assert "must vary across rows" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert detail["code"] == "CONSTANT_OUTCOME"
+    assert "single distinct value" in detail["message"]
 
 
 def test_random_mixed_dataset_happy_path():

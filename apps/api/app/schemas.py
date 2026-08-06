@@ -370,6 +370,10 @@ class AnalysisProvenance(BaseModel):
     train_eval_strategy: str = ""
     random_seed: int = 42
     column_roles: dict[str, str] = Field(default_factory=dict)
+    # Columns dropped from a fitted design matrix — e.g. zero-variance
+    # confounders, or a treatment with no observed variation. Never a silent
+    # scientific change: the reason travels with the column.
+    excluded_columns: list["ExcludedColumn"] = Field(default_factory=list)
 
 
 class ConfigurationProblem(BaseModel):
@@ -378,6 +382,20 @@ class ConfigurationProblem(BaseModel):
     message: str
     remedy: str
     columns: list[str] = Field(default_factory=list)
+
+
+class ExcludedColumn(BaseModel):
+    """
+    A column left out of a fitted model, and why.
+
+    Exclusion is not silence: the user's original role assignment for this
+    column is unchanged (see `AnalysisProvenance.column_roles`), only the
+    fitted design matrix for the named lever's estimate omits it.
+    """
+    column: str
+    scope: Literal["treatment", "adjustment_set"]
+    lever: str
+    reason: str
 
 
 class AnalysisBundle(BaseModel):
