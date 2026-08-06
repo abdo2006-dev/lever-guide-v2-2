@@ -146,6 +146,20 @@ VARIABLES: tuple[VariableSpec, ...] = (
         valid_range=(20.0, 150.0),
         observed_range=(37.4, 108.15),
         intervention_eligibility="eligible",
+        evidence_status="conflicting",
+        notes=(
+            "The adjusted estimate is specification-dependent: it stays "
+            "negative and significant on this declared set across seeds and "
+            "on the full 5,000-row dataset (so subsampling does not explain "
+            "it), but adding product_variant — which the source study absorbs "
+            "as a fixed effect on every regression, not as a declared "
+            "backdoor adjuster for this lever — moves it to the source's "
+            "reported near-zero, insignificant result. Fixed effects are "
+            "Phase 2 scope and are not implemented here, so this application "
+            "and the source study currently answer slightly different "
+            "adjusted questions for this lever. See "
+            "docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md §8."
+        ),
     ),
     VariableSpec(
         name="dryer_dewpoint_c",

@@ -487,8 +487,13 @@ After — four ranked, four set aside, every one with an interval:
 | 4 | `barrel_temperature_c` | eligible | −0.015 | [−0.021, −0.009] |
 | — | `shot_size_g` | **infeasible** | −0.264 | short shot for 1,951 / 2,000 rows |
 | — | `hold_pressure_bar` | **conflicting evidence** | — | adjustment set determines the sign |
+| — | `screw_speed_rpm` | **conflicting evidence** | — | adjusted estimate is specification-dependent (§8.1) |
 | — | `dryer_dewpoint_c` | **exploratory** | −0.031 | acts through a mediator held fixed |
 | — | `maintenance_days_since_last` | **exploratory** | −0.020 | acts through a mediator held fixed |
+
+`screw_speed_rpm` previously disappeared from this table entirely rather than
+appearing set aside — a defect independent of the discrepancy in §8.1,
+described in §12.
 
 `cooling_time_s` — the one lever with strong, well-identified, mechanism-backed
 evidence — moves from rank 3 to rank 1. No ranked candidate conflicts with its
@@ -561,11 +566,72 @@ failures to distinguish from regressions — the baseline suite was fully green.
 
 **Stated plainly, because this phase is about not overstating things.**
 
-1. **`screw_speed_rpm` disagrees with the source.** −0.126 p.p./SD here against
-   a published +0.002 with interval [−0.037, +0.045]. The declared adjustment
-   set matches the source's; the differences are the absent fixed effects and
-   the 2,000-row sub-sample. This is unexplained and should be resolved in
-   Phase 2. It is the one estimate on this branch that does not reconcile.
+1. **`screw_speed_rpm` disagrees with the source, and it is not the sample
+   size.** An independent review after this phase reproduced the earlier
+   version of this note — which attributed the gap primarily to the 2,000-row
+   sub-sample — and found that explanation unsupported. Re-run here, on this
+   branch's own estimator (`app/models/causal.py`):
+
+   | Specification | Rows | β (p.p./SD) | 95% interval | Excludes zero |
+   |---|---|---|---|---|
+   | Declared set, seed 42 (shipped demo) | 2,000 | −0.126 | [−0.190, −0.061] | yes |
+   | Declared set, seed 1 | 2,000 | −0.121 | [−0.184, −0.057] | yes |
+   | Declared set, seed 7 | 2,000 | −0.136 | [−0.201, −0.072] | yes |
+   | Declared set, **full dataset** | **5,000** | **−0.132** | [−0.173, −0.091] | yes |
+   | Declared set + `product_variant`, seed 42 | 2,000 | +0.015 | [−0.050, +0.081] | no |
+   | Declared set + `product_variant`, **full dataset** | **5,000** | **+0.005** | [−0.037, +0.047] | no |
+   | Source study, published (full FE) | 5,000 | +0.002 | [−0.037, +0.045] | no |
+
+   The full 5,000-row dataset gives −0.132, statistically indistinguishable
+   from every 2,000-row seed tried (−0.121 to −0.136). **Sub-sampling is not
+   the driver of this discrepancy and the earlier claim that it was is
+   withdrawn.**
+
+   The source study's own code (`datathon-CUB-2026/src/causal_helpers.py`,
+   run directly against the identical shipped dataset) was used to isolate the
+   cause. It absorbs `machine_id`, `mold_id`, `product_variant` and
+   `operator_shift` as fixed effects on **every** regression, on top of the
+   declared backdoor set — a Phase 2 item this application does not implement
+   (limitation 3 below). Toggling those fixed effects individually:
+
+   | Fixed effects included | β (p.p./SD), full data | 95% interval |
+   |---|---|---|
+   | None | −0.132 | [−0.174, −0.084] |
+   | `machine_id` + `mold_id` + `operator_shift` (no `product_variant`) | −0.090 | [−0.132, −0.045] |
+   | `product_variant` only | +0.005 | [−0.036, +0.049] |
+   | All four (published) | +0.002 | [−0.037, +0.045] |
+
+   `product_variant` alone accounts for essentially the entire gap;
+   `machine_id`/`mold_id`/`operator_shift` together move the estimate only
+   from −0.132 to −0.090. An ANOVA on the shipped data confirms why:
+   `screw_speed_rpm` varies sharply by `product_variant` (one-way ANOVA,
+   F = 274, p ≈ 0; variant means range 61.7–76.4 rpm), and so does
+   `scrap_rate_pct` (F = 126, p ≈ 1.4×10⁻¹⁷¹) — `product_variant` is a real
+   common cause of both.
+
+   This is not treated as a porting mistake, and `product_variant` has **not**
+   been added to this lever's adjustment set. The source's own declared
+   backdoor set for `screw_speed_rpm` (`src/utils.py`) is byte-identical to
+   this application's — `product_variant` enters the source's number only
+   through its blanket fixed-effects layer, not through a DAG-justified
+   backdoor argument specific to this lever. Adding it here would mean
+   approximating fixed effects one variable at a time to reproduce a specific
+   published number, which this phase's instructions rule out. The two
+   implementations therefore currently answer **slightly different adjusted
+   questions** for this lever: this application's estimate is the total
+   effect under the declared graph with no fixed effects; the source's is the
+   same total effect additionally net of machine/mould/variant/shift
+   group-level differences.
+
+   Because the sign and significance of this specific estimate are not robust
+   to that difference — unlike every other lever on this branch, which
+   reconciles with the source to within the stated tolerances — `screw_speed_rpm`
+   is now declared `evidence_status: "conflicting"` in the ontology, the same
+   mechanism already used for `hold_pressure_bar` (§2.4). Its intervention
+   status is `conflicting_evidence`: the adjusted estimate is still computed
+   and shown, but it is not ranked and no direction is asserted. Resolving
+   this for real needs the fixed-effects work in limitation 3, which is
+   Phase 2 scope.
 2. **`mold_temperature_c` is now further from the source** (+0.392 against
    +0.879) because `cooling_time_s` was dropped as a descendant. That is the
    right call under an acyclic graph, but it means the two codebases are
@@ -650,9 +716,10 @@ Explicitly **not** attempted here, in the order the audit recommends:
    are excluded from an analysis that adjusts for them.
 5. What-If Simulations tab — four eligible candidates ranked 1–4 with intervals;
    a separate "Assessed and set aside" section containing `shot_size_g`
-   (infeasible, with the row count), `hold_pressure_bar` (conflicting evidence),
-   and the two mediated levers (exploratory). Expanding a card shows the
-   feasibility checks with pass/fail marks.
+   (infeasible, with the row count), `hold_pressure_bar` and `screw_speed_rpm`
+   (both conflicting evidence), and the two mediated levers (exploratory).
+   Expanding a card shows the feasibility checks with pass/fail marks. No
+   configured lever is missing from either section (§12).
 6. Executive Summary — heading counts eligible and set-aside candidates; "Top
    Levers to Pull" is gone; the provenance panel shows the ontology version and
    the sampling note.
@@ -676,6 +743,83 @@ cd apps/api && ./.venv/bin/python -m pytest -q
 cd apps/api && ./.venv/bin/python scripts/export_ontology.py
 cd apps/web && npx tsc --noEmit && npx next lint && npm run build
 ```
+
+---
+
+## 12. Post-review corrections
+
+An independent adversarial review after the rest of this phase found two High
+findings and a documentation error, addressed here without reopening the
+broader analytical-core work deferred to Phase 2.
+
+1. **A constant-valued predictor, confounder or treatment could crash the
+   API.** A design matrix with too little identifying information relative to
+   its adjustment set — most directly triggered by a zero-variance column, but
+   sharing the same root cause as ordinary multicollinearity — could make
+   `statsmodels` return a non-finite coefficient, standard error or interval.
+   Serialised through the real response path, this raised
+   `ValueError: Out of range float values are not JSON compliant`
+   (`starlette.responses.JSONResponse` sets `allow_nan=False`), an unhandled
+   500. Fixed in `app/models/causal.py`, `app/models/pipeline.py` and
+   `app/models/intervention.py`:
+   * A constant **outcome** is rejected with a structured `CONSTANT_OUTCOME`
+     validation error (`app/routers/analysis.py`).
+   * A constant **treatment** is rejected for causal-effect estimation with a
+     structured reason; if every configured treatment is constant, the whole
+     request is rejected (`ALL_TREATMENTS_CONSTANT`); descriptive and
+     predictive results are unaffected either way.
+   * A constant **adjuster** (confounder, context or generated dummy) is
+     dropped from the affected lever's design matrix, not from the user's
+     configuration — `AnalysisProvenance.excluded_columns` records the
+     column, the lever, and the reason, and a bundle warning names the count.
+   * Every numeric field is validated finite immediately before it would be
+     returned; a result that is still non-finite is withheld with a reason
+     rather than serialised, never replaced with a fabricated number.
+   * See `tests/test_scientific_safety.py` for behavioural coverage,
+     including the exact crash reproduction above turned into a regression
+     test.
+
+2. **A configured lever could disappear from the Interventions tab with no
+   trace.** `run_intervention_engine` tried both the "increase" and "decrease"
+   direction for each lever and silently `continue`d — dropping the
+   candidate entirely — whenever neither direction was estimated to improve
+   the outcome. This is what made `screw_speed_rpm` vanish: it has a valid,
+   strong adjusted estimate, but the predictive simulation found no improving
+   direction for it, and the lever was dropped rather than reported. The same
+   code path could drop any lever, and separately dropped a lever with no
+   observed variation for a different reason (no headroom to simulate a
+   change at all). Both cases now produce an explicit `Intervention` record
+   with `status: "unsupported"` and a specific reason instead of being
+   skipped. `screw_speed_rpm` specifically now also carries
+   `evidence_status: "conflicting"` (item 3), so it resolves to
+   `conflicting_evidence` rather than `unsupported` — its adjusted estimate is
+   preserved and shown, no direction is asserted, and it appears in "Assessed
+   and set aside", never in the ranked list. See
+   `tests/test_scientific_safety.py::test_every_configured_lever_gets_an_intervention_status`.
+
+3. **The screw-speed documentation blamed the wrong thing.** §8.1 previously
+   attributed the `screw_speed_rpm` discrepancy primarily to the 2,000-row
+   sub-sample. Re-investigated and rewritten in place (§8.1): the full
+   5,000-row dataset and three different seeds all reproduce the same
+   negative, significant estimate this application reports, so sub-sampling
+   does not explain it. The reproducible driver, isolated using the source
+   study's own code against the identical dataset, is `product_variant` —
+   which the source absorbs as a fixed effect on every regression rather than
+   through a declared backdoor argument specific to this lever. `screw_speed_rpm`'s
+   adjustment set was **not** changed to include it (that would mean adding a
+   variable to match a published number, which these instructions rule out,
+   and fixed effects remain Phase 2 scope); instead the lever is now declared
+   `evidence_status: "conflicting"`, and the two implementations' differing
+   estimates are documented as answering slightly different adjusted
+   questions rather than one being an unexplained bug.
+
+None of this reopens Phase 2 (absorbed fixed effects, `GroupKFold`, mediator
+propagation) or any of the other Medium/Low findings from the same review.
+`mold_temperature_c`'s adjustment set, the mediator-exclusion guarantee,
+`shot_size_g`'s infeasible status, `hold_pressure_bar`'s non-primary status,
+optional-model visibility, generic-upload role defaults, and the
+association/adjusted/predictive result-type distinction were all confirmed
+unchanged by the new tests in `tests/test_scientific_safety.py`.
 
 To regenerate the before/after numbers in §6, check out `2bd854f` into a
 worktree and post the demo CSV to `/api/analyze` with that commit's
