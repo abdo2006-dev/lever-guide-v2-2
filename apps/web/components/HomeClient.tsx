@@ -9,33 +9,33 @@ import { useAppStore } from "@/lib/store";
 const FEATURES = [
   {
     icon: BarChart3,
-    title: "Five-model comparison",
-    body: "OLS, Ridge, Random Forest, XGBoost, and LightGBM trained and evaluated on a held-out test set.",
+    title: "Model comparison, with run status",
+    body: "OLS, Ridge and Random Forest, plus XGBoost and LightGBM where their libraries are available. Every configured model reports whether it actually ran.",
   },
   {
     icon: GitBranch,
-    title: "Assumption-based effect estimates",
-    body: "Assign column roles and optionally submit DAG edges through the API. The engine validates the graph before adjusted OLS estimates.",
+    title: "Three kinds of result, kept apart",
+    body: "Associations, adjusted observational effect estimates, and predictive what-if simulations are labelled separately — because they support different claims.",
   },
   {
     icon: Lightbulb,
-    title: "Ranked recommendations",
-    body: "Direction, magnitude, evidence type, strength, tradeoffs, and assumptions — for every lever.",
+    title: "Screened candidate changes",
+    body: "A simulated change is only ranked if it is physically feasible, inside observed support, and agrees with its own adjusted estimate. The rest are shown with the reason they were set aside.",
   },
   {
     icon: Brain,
     title: "Executive summary",
-    body: "Plain-language summary for non-technical stakeholders with honest caveats included.",
+    body: "Plain-language summary for non-technical stakeholders, with the caveats attached to the numbers rather than to a footnote.",
   },
   {
     icon: ShieldCheck,
-    title: "Honest uncertainty",
-    body: "Confidence intervals, p-values, and model quality metrics always visible.",
+    title: "Uncertainty where we have it",
+    body: "Confidence intervals and p-values on every adjusted effect estimate. Simulated changes carry a row-resampling interval that holds the model fixed, and say so.",
   },
   {
     icon: Upload,
     title: "Bring your own data",
-    body: "Upload CSV files up to 50 MB. Large datasets are sampled to 2,000 rows for analysis.",
+    body: "CSV up to about 5 MB (browser storage limit). Datasets over 2,000 rows are sub-sampled. You specify the outcome and the roles — nothing is inferred for you.",
   },
 ];
 
@@ -88,8 +88,10 @@ export function HomeClient() {
           </span>
         </h1>
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
-          Upload any tabular dataset, pick a KPI, and get ranked, explainable
-          recommendations — with predictive and causal evidence shown side by side.
+          Upload a tabular dataset, pick a KPI, and get ranked, explainable
+          candidate changes — with predictive signal and DAG-adjusted effect
+          estimates shown side by side, and the difference between them made
+          explicit.
         </p>
 
         {error && (
@@ -139,8 +141,10 @@ export function HomeClient() {
         <div className="container max-w-3xl mx-auto text-center">
           <h2 className="text-2xl font-bold mb-3">Serious ML under the hood</h2>
           <p className="text-muted-foreground text-sm leading-relaxed max-w-xl mx-auto">
-            Python FastAPI backend running scikit-learn, XGBoost, and LightGBM.
-            Effect estimates use back-door adjusted OLS with statsmodels.
+            Python FastAPI backend running scikit-learn, with XGBoost and LightGBM
+            as optional extras. Effect estimates use adjusted OLS with statsmodels
+            under a declared causal graph — an assumption stated up front, not a
+            structure discovered from data.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
             {["Next.js 15","TypeScript","FastAPI","scikit-learn","XGBoost","LightGBM","statsmodels","Vercel","Render"].map((t) => (

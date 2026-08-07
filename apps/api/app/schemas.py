@@ -11,11 +11,51 @@ from pydantic import BaseModel, Field, field_validator
 # ── Column / Dataset ─────────────────────────────────────────────────────────
 
 ColumnRole = Literal[
-    "outcome", "controllable", "confounder",
-    "mediator", "context", "identifier", "ignore"
+    "outcome",
+    "controllable",     # a real-time setpoint the user can change
+    "planning_lever",   # a scheduling decision, not a per-interval setpoint
+    "confounder",
+    "mediator",
+    "context",
+    "identifier",
+    "ignore",
+    "unassigned",       # the user has not stated a causal role for this column
 ]
 ColumnKind = Literal["numeric", "categorical", "datetime", "text"]
 Task = Literal["regression"]
+
+# What kind of claim a result is. These three are not interchangeable and the API
+# never lets a consumer guess which one it is holding.
+#   association             — a marginal relationship, no adjustment, no claim
+#   adjusted_effect_estimate — observational effect under an assumed causal graph
+#   predictive_what_if      — model inputs changed, predictions compared
+ResultType = Literal["association", "adjusted_effect_estimate", "predictive_what_if"]
+
+# How an interval was produced, or why there is none.
+IntervalMethod = Literal[
+    "ols_analytic_homoskedastic",   # textbook regression CI
+    "row_bootstrap_fixed_model",    # resamples rows; holds the fitted model fixed
+]
+
+AnalysisMode = Literal[
+    "causal",                 # effect estimation and intervention candidates
+    "descriptive_predictive",  # description and prediction only; no causal claims
+]
+
+INTERPRETATION_NOTES: dict[str, str] = {
+    "association": (
+        "This is a marginal association. It is not adjusted for anything and "
+        "carries no causal claim."
+    ),
+    "adjusted_effect_estimate": (
+        "Interpretation depends on the selected causal graph and assumptions, "
+        "including no important unmeasured confounding."
+    ),
+    "predictive_what_if": (
+        "This modifies model inputs and compares predictions. It is not "
+        "automatically a causal intervention estimate."
+    ),
+}
 
 
 class TopValue(BaseModel):
@@ -61,9 +101,18 @@ class DagEdge(BaseModel):
 
 
 class DagValidationResult(BaseModel):
+    # `valid` means structurally well-formed (acyclic, known nodes). It has never
+    # meant "scientifically defensible", and `dag_source` is what tells a reader
+    # where the graph came from.
     valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    dag_source: Literal[
+        "user_supplied",
+        "declared_domain_ontology",
+        "assumed_from_roles",
+    ] = "assumed_from_roles"
+    graph_assumption: Optional[str] = None
 
 
 # ── Analysis Request ─────────────────────────────────────────────────────────
@@ -74,6 +123,7 @@ class AnalysisRequest(BaseModel):
     target: str
     task: Task = "regression"
     improve_direction: Literal["decrease", "increase"] = "decrease"
+    analysis_mode: AnalysisMode = "causal"
     column_roles: dict[str, ColumnRole] = Field(default_factory=dict)
     dag_edges: list[DagEdge] = Field(default_factory=list)
     random_seed: int = 42
@@ -120,8 +170,11 @@ class PredictionPoint(BaseModel):
     residual: float
 
 
+ModelKey = Literal["ols", "ridge", "rf", "xgb", "lgbm"]
+
+
 class PredictiveResult(BaseModel):
-    model: Literal["ols", "ridge", "rf", "xgb", "lgbm"]
+    model: ModelKey
     display_name: str
     task: Task
     metrics: ModelMetrics
@@ -131,9 +184,34 @@ class PredictiveResult(BaseModel):
     is_winner: bool = False
 
 
-# ── Causal Results ────────────────────────────────────────────────────────────
+class ModelStatus(BaseModel):
+    """
+    What actually happened to every configured model.
+
+    A model that could not run appears here with a reason. It is never omitted,
+    because omission reads as "not configured" rather than "did not run".
+    """
+    model: ModelKey
+    display_name: str
+    status: Literal[
+        "succeeded",
+        "unavailable_dependency",   # the library could not be imported
+        "training_failed",          # the library loaded but fitting raised
+        "skipped_by_configuration",
+    ]
+    detail: Optional[str] = None
+
+
+# ── Adjusted effect estimates ─────────────────────────────────────────────────
 
 class CausalEffect(BaseModel):
+    """
+    An observational effect estimate under an assumed causal graph.
+
+    Named `CausalEffect` for backward compatibility of the API surface; every
+    field that a reader interprets says `adjusted_effect_estimate`.
+    """
+    result_type: ResultType = "adjusted_effect_estimate"
     feature: str
     effect_per_std: float          # adjusted β for +1 SD change
     effect_raw: float              # unstandardised β
@@ -142,18 +220,56 @@ class CausalEffect(BaseModel):
     p_value: float
     conf_int_lo: float
     conf_int_hi: float
+    interval_method: IntervalMethod = "ols_analytic_homoskedastic"
     adjusted_for: list[str]
+    adjustment_set_source: Literal["declared_domain_dag", "derived_from_graph"] = (
+        "derived_from_graph"
+    )
+    estimand: str = "total effect on the outcome, under the stated graph"
+    causal_role: Optional[str] = None
     controllable: bool
-    evidence_strength: Literal["strong", "moderate", "weak", "insufficient"]
+    n_observations: int = 0
+    evidence_strength: Literal["strong", "moderate", "weak", "insufficient"] = "insufficient"
+    # True when the 95 % interval includes zero — the "do not act on this" signal
+    # the source study used, which a p-value threshold alone does not give.
+    interval_excludes_zero: bool = False
+    interpretation_note: str = INTERPRETATION_NOTES["adjusted_effect_estimate"]
     warning: Optional[str] = None
+    notes: list[str] = Field(default_factory=list)
 
 
-# ── Interventions ─────────────────────────────────────────────────────────────
+# ── Predictive what-if simulations ────────────────────────────────────────────
 
 EvidenceStrength = Literal["strong", "moderate", "weak"]
 
+# Whether a simulated change may be presented as a candidate action.
+#   eligible            — feasible, supported, evidence agrees; may be ranked
+#   exploratory         — representable but the mechanism is only partly modelled
+#   unsupported         — outside observed support, or the model did not run
+#   infeasible          — violates a documented physical constraint
+#   conflicting_evidence — the adjusted estimate disagrees with the simulation
+InterventionStatus = Literal[
+    "eligible", "exploratory", "unsupported", "infeasible", "conflicting_evidence",
+]
+
+SupportStatus = Literal[
+    "within_observed",
+    "outside_observed_within_declared",
+    "outside_declared",
+    "unknown",
+]
+
+
+class FeasibilityCheck(BaseModel):
+    """One named check and what it concluded."""
+    check: str
+    passed: bool
+    detail: str
+
 
 class Intervention(BaseModel):
+    result_type: ResultType = "predictive_what_if"
+    # 0 means unranked. Only `eligible` results receive a rank.
     rank: int
     feature: str
     direction: Literal["increase", "decrease"]
@@ -163,19 +279,38 @@ class Intervention(BaseModel):
     suggested_value: float
     delta: float
     delta_pct: float
+
     expected_kpi_change: float
     expected_kpi_change_pct: float
+    # Null when no interval could be computed. Never filled with a placeholder.
+    expected_kpi_change_lo: Optional[float] = None
+    expected_kpi_change_hi: Optional[float] = None
+    interval_method: Optional[IntervalMethod] = None
+    uncertainty_status: str = "not_computed"
+
+    status: InterventionStatus = "exploratory"
+    status_reason: str = ""
+    support_status: SupportStatus = "unknown"
+    feasibility_checks: list[FeasibilityCheck] = Field(default_factory=list)
+
     evidence_strength: EvidenceStrength
-    evidence_type: Literal["causal", "predictive", "mixed"]
+    # Whether the adjusted estimate agrees with the simulated direction. Replaces
+    # the old `evidence_type: "causal"`, which asserted a causal reading from a
+    # p-value alone and never checked the sign.
+    adjustment_support: Literal["aligned", "conflicting", "inconclusive", "none"] = "none"
+    simulation_model: str = "gradient_boosting_regressor"
+    simulation_evaluation: str = "in-sample: fitted and evaluated on the same rows"
     tradeoff: str
     rationale: str
     assumptions: list[str]
     caveat: str
+    interpretation_note: str = INTERPRETATION_NOTES["predictive_what_if"]
 
 
 # ── EDA ───────────────────────────────────────────────────────────────────────
 
 class CorrelationPair(BaseModel):
+    result_type: ResultType = "association"
     feature_a: str
     feature_b: str
     correlation: float
@@ -212,25 +347,85 @@ class ExecutiveSummary(BaseModel):
 
 # ── Full Analysis Bundle ──────────────────────────────────────────────────────
 
+class AnalysisProvenance(BaseModel):
+    """
+    Enough metadata to reconstruct what produced every number in this bundle.
+
+    The UI shows a compact version of this; the API contract keeps all of it.
+    """
+    analysis_mode: AnalysisMode
+    ontology_id: Optional[str] = None
+    ontology_version: Optional[str] = None
+    graph_assumption: Optional[str] = None
+    dag_source: str = "assumed_from_roles"
+    adjustment_set_source: str = "derived_from_graph"
+    effect_estimator: str = "ordinary least squares on standardised columns"
+    effect_interval_method: Optional[str] = None
+    simulation_model: Optional[str] = None
+    simulation_evaluation: Optional[str] = None
+    simulation_interval_method: Optional[str] = None
+    n_rows_supplied: int = 0
+    n_rows_analysed: int = 0
+    sampling_note: Optional[str] = None
+    train_eval_strategy: str = ""
+    random_seed: int = 42
+    column_roles: dict[str, str] = Field(default_factory=dict)
+    # Columns dropped from a fitted design matrix — e.g. zero-variance
+    # confounders, or a treatment with no observed variation. Never a silent
+    # scientific change: the reason travels with the column.
+    excluded_columns: list["ExcludedColumn"] = Field(default_factory=list)
+
+
+class ConfigurationProblem(BaseModel):
+    """A specific thing that is missing or wrong, and how to fix it."""
+    code: str
+    message: str
+    remedy: str
+    columns: list[str] = Field(default_factory=list)
+
+
+class ExcludedColumn(BaseModel):
+    """
+    A column left out of a fitted model, and why.
+
+    Exclusion is not silence: the user's original role assignment for this
+    column is unchanged (see `AnalysisProvenance.column_roles`), only the
+    fitted design matrix for the named lever's estimate omits it.
+    """
+    column: str
+    scope: Literal["treatment", "adjustment_set"]
+    lever: str
+    reason: str
+
+
 class AnalysisBundle(BaseModel):
     request_id: str
     dataset_name: str
     target: str
     task: Task
+    analysis_mode: AnalysisMode = "causal"
     row_count: int
     feature_count: int
     controllable_count: int
 
     predictive: list[PredictiveResult]
+    model_statuses: list[ModelStatus] = Field(default_factory=list)
     best_model: str  # model key
     causal: list[CausalEffect]
+    # Every candidate, with a status. Only `status == "eligible"` entries carry a
+    # rank; the rest are diagnostics and the UI renders them separately.
     interventions: list[Intervention]
     correlations: list[CorrelationPair]
     distributions: list[FeatureDistribution]
     executive: ExecutiveSummary
     dag_validation: DagValidationResult
+    provenance: Optional[AnalysisProvenance] = None
     warnings: list[str] = Field(default_factory=list)
     runtime_seconds: float = 0.0
+
+    @property
+    def ranked_interventions(self) -> list[Intervention]:
+        return [iv for iv in self.interventions if iv.status == "eligible"]
 
 
 # ── Copilot / RAG ─────────────────────────────────────────────────────────────

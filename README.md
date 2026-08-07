@@ -11,15 +11,18 @@ Decision support for tabular regression problems. Upload a CSV, choose a numeric
 
 | Capability | Current implementation |
 |---|---|
-| CSV upload | Frontend accepts `.csv` files up to 50 MB. |
-| Demo dataset | Injection-molding demo with 5,000 rows and 32 columns. Backend samples to 2,000 rows for analysis. |
+| CSV upload | Frontend accepts `.csv` files up to about 5 MB. The file is held in `sessionStorage` and sent as a single JSON request body, which is the real ceiling. |
+| Demo dataset | Injection-molding demo with 5,000 rows and 33 columns. Backend samples to 2,000 rows for analysis. |
 | Task type | Regression only. Classification is not exposed in schemas, UI, or docs yet. |
-| Column roles | `outcome`, `controllable`, `confounder`, `mediator`, `context`, `identifier`, `ignore`. |
-| Predictive models | OLS, Ridge, Random Forest, XGBoost, and LightGBM regressors. Optional native tree libraries are skipped gracefully if unavailable in local development. |
+| Column roles | `outcome`, `controllable`, `planning_lever`, `confounder`, `mediator`, `context`, `identifier`, `ignore`, `unassigned`. Uploaded columns default to `unassigned`: they are used as predictors and never as adjusters. |
+| Analysis modes | `causal` (adjusted effect estimates plus screened what-if simulations) and `descriptive_predictive` (prediction and description only, no causal claims, no treatment required). |
+| Demo ontology | Roles, per-lever adjustment sets, physical bounds and coupling constraints for the curated demo are declared in `apps/api/app/ontology/` and generated into the frontend. See [docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md](docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md). |
+| Predictive models | OLS, Ridge and Random Forest always; XGBoost and LightGBM where their native libraries are importable. Every configured model reports a status — `succeeded`, `unavailable_dependency`, `training_failed`, `skipped_by_configuration` — so a model that did not run is never silently omitted. |
 | Cross-validation | 3-fold CV R2 for OLS/Ridge/RF when enabled and enough rows are available. XGBoost and LightGBM report held-out metrics only. |
-| Effect estimates | Back-door adjusted OLS for numeric controllable variables. This is observational adjustment, not proof of causality. |
-| DAG handling | API accepts optional DAG edges, validates them, and rejects invalid DAGs. If no DAG is supplied, the backend builds a default assumed DAG from the selected column roles. There is no visual DAG editor yet. |
-| Interventions | Numeric controllable recommendations from a GradientBoostingRegressor counterfactual screening model, annotated with adjusted OLS evidence when available. |
+| Effect estimates | Adjusted OLS for numeric lever variables, under a declared or assumed causal graph. **Adjusted observational effect estimates**, not proof of causality: interpretation depends on the graph and on there being no important unmeasured confounding. |
+| DAG handling | API accepts optional DAG edges, validates them, and rejects invalid DAGs. A dataset with a declared ontology uses that ontology's graph; otherwise a default graph is assumed from the column roles. Every response reports `dag_source`. There is no visual DAG editor yet. |
+| What-if simulations | **Predictive what-if simulations** from a GradientBoostingRegressor: one input is changed and predictions are compared. Screened for physical feasibility, observed support, and agreement with the adjusted estimate — only candidates that pass all three are ranked. The rest are returned with the reason they were set aside. |
+| Uncertainty | Effect estimates carry OLS confidence intervals under homoskedasticity. Simulations carry a row-resampling interval that holds the fitted model fixed. Where an interval cannot be computed, the bounds are `null` with a stated reason. |
 | Executive summary | Generated from model, effect-estimate, intervention, and warning outputs. |
 | Analysis Copilot | Optional lightweight RAG assistant at `POST /api/copilot/ask`, grounded in indexed analysis artifacts, stored in Qdrant, and powered by Groq when configured. |
 | Experiment tracking | Optional Weights & Biases tracking for dataset profile, model metrics, and analysis artifacts from each `/api/analyze` run. |
@@ -36,9 +39,13 @@ apps/web
 apps/api
   FastAPI backend
   app/routers/analysis.py: POST /api/analyze and POST /api/copilot/ask
-  app/models/pipeline.py: regression model comparison
+  app/ontology/: declared dataset ontologies — roles, adjustment sets,
+    bounds, coupling identities. Single source of truth; the frontend's
+    copy is generated from it by scripts/export_ontology.py
+  app/models/pipeline.py: regression model comparison and per-model status
   app/models/causal.py: adjusted OLS effect estimates
-  app/models/intervention.py: counterfactual recommendation engine
+  app/models/intervention.py: predictive what-if simulation and screening
+  app/models/feasibility.py: feasibility and observed-support checking
   app/rag.py: artifact corpus, Qdrant-backed retrieval, Groq generation
   app/utils/dag.py: DAG validation and adjustment-set helpers
 ```
@@ -52,14 +59,16 @@ The root `render.yaml` builds the Next static export and serves it from FastAPI 
 1. Parse CSV with pandas.
 2. Validate target and minimum row count. The target must coerce to a numeric regression target with at least 30 non-missing numeric values and more than one distinct value.
 3. Sample datasets larger than 2,000 rows with `random_seed`.
-4. Assign column roles from the request.
-5. Build a default assumed DAG or accept user-provided DAG edges.
-6. Validate the DAG and stop with `422 INVALID_DAG` if it is cyclic, malformed, or references unknown columns.
-7. Build the feature matrix.
-8. Train regression models.
-9. Run adjusted OLS effect estimation.
-10. Generate intervention recommendations, EDA summaries, executive summary, and a Copilot retrieval index in Qdrant.
-11. Optionally log run metrics and artifacts to Weights & Biases.
+4. Resolve a curated ontology if the dataset matches one closely enough; otherwise take the generic path with no domain claims.
+5. Assign column roles from the request. A column the request does not mention is `unassigned` — a predictor, never an adjuster.
+6. Validate the analysis configuration and stop with `422 INVALID_ANALYSIS_CONFIGURATION` if a causal question was requested without a treatment. The response names the problem, the remedy, and the columns involved.
+7. Take the causal graph from the request, the ontology, or the role template, and record which.
+8. Validate the DAG and stop with `422 INVALID_DAG` if it is cyclic, malformed, or references unknown columns.
+9. Build the feature matrix.
+10. Train regression models and record a status for each configured model.
+11. In causal mode, run adjusted OLS effect estimation using declared or derived adjustment sets, then run and screen what-if simulations.
+12. Generate EDA summaries, executive summary, provenance, and a Copilot retrieval index in Qdrant.
+13. Optionally log run metrics and artifacts to Weights & Biases.
 
 ### Predictive Models
 
@@ -73,23 +82,51 @@ All models use the same train/test split. The test fraction is between 10% and 2
 | XGBoost | `n_estimators=150`, `learning_rate=0.08`, `max_depth=4`, `min_child_weight=15`, `subsample=0.8`, `colsample_bytree=0.8`, `n_jobs=1`. |
 | LightGBM | `n_estimators=150`, `learning_rate=0.08`, `max_depth=4`, `num_leaves=20`, `min_child_samples=20`, `subsample=0.8`, `colsample_bytree=0.8`, `n_jobs=1`. |
 
-Metrics are regression metrics: R2, adjusted R2 where applicable, RMSE, MAE, optional CV R2, train rows, and test rows. The Dockerfile installs `libgomp1` for boosted-tree native runtime support. macOS local development may require `libomp` for XGBoost/LightGBM.
+Metrics are regression metrics: R2, adjusted R2 where applicable, RMSE, MAE, optional CV R2, train rows, and test rows.
+
+The split is random — not grouped by any entity and not time-ordered — and the
+winning model is selected on the same held-out set its score is reported on.
+Both make the headline R2 optimistic; see Limitations.
+
+XGBoost and LightGBM are optional. They need a system OpenMP runtime: the
+Dockerfile installs `libgomp1`, and macOS local development needs `libomp`.
+Where they cannot be imported the application still runs, and every response
+carries a `model_statuses` entry saying which models ran and why the others did
+not — so a three-model comparison is never displayed as a five-model one.
 
 ### Effect Estimates
 
-For each numeric controllable variable, the backend fits:
+For each numeric lever, the backend fits:
 
 ```text
-target ~ controllable + confounders + DAG_parents(controllable) + context
+target ~ lever + adjustment_set
 ```
 
-The adjustment set is a practical heuristic:
+The adjustment set comes from one of two places, and every estimate reports
+which via `adjustment_set_source`:
 
-- Include observed confounders, DAG parents of the cause, and context variables.
-- Exclude mediators, descendants of the cause, the outcome, and the cause itself.
-- Return coefficient, standard error, t-statistic, p-value, confidence interval, adjusted-for columns, and evidence-strength labels.
+- **`declared_domain_dag`** — a per-lever set declared by the dataset's ontology.
+  Used for the curated demo. These are domain claims, checked at test time
+  against the declared graph: no adjuster may be a descendant of its cause and no
+  mediator may appear.
+- **`derived_from_graph`** — observed confounders, graph parents of the cause,
+  and context variables; minus mediators, descendants of the cause, the outcome
+  and the cause itself. A practical heuristic, used when no ontology applies.
 
-These are observational adjusted associations. They are useful for transparent screening, but they are not do-calculus, not causal discovery, and not guaranteed minimal valid adjustment sets.
+The two are never merged, because mixing a domain claim with a heuristic would
+make the reported set untraceable. Mediators are stripped in either case, and
+each estimate lists the ones it dropped.
+
+Each estimate returns the coefficient, standard error, t-statistic, p-value,
+confidence interval and its method, the estimand, the adjusted-for columns and
+their source, the observation count, and an evidence-strength label that is
+capped at "weak" whenever the interval includes zero.
+
+These are **adjusted observational effect estimates**. They are useful for
+transparent screening, but they are not do-calculus, not causal discovery, and
+not guaranteed minimal valid adjustment sets. There are no fixed effects and no
+cluster-robust standard errors, so for clustered panel data the intervals shown
+are too narrow.
 
 ### DAG Validation
 
@@ -106,26 +143,51 @@ Invalid user DAGs never continue into adjustment-set logic. The API returns a st
 }
 ```
 
-When no DAG is provided, the backend creates a default assumed DAG:
+When no DAG is provided, the graph comes from one of two places, reported as
+`dag_validation.dag_source`:
 
-- confounders point to controllables and the target
-- controllables point to the target
-- context variables point to the target
+- **`declared_domain_ontology`** — the dataset matched a curated ontology and
+  that ontology's declared graph is used. It contains lever-to-lever structure,
+  which the role template cannot express.
+- **`assumed_from_roles`** — the fallback template: confounders point to
+  controllables and the target, controllables point to the target, context
+  variables point to the target.
 
-This default graph is a convenience assumption based on user roles. It is not learned from data. A visual DAG editor would be a major product upgrade because the quality of the effect estimates depends on making these assumptions visible and editable.
+`dag_validation.valid` means *structurally* valid — acyclic, with every node a
+real column. It has never meant scientifically defensible, and the response now
+carries `graph_assumption` alongside it saying so. **No causal graph is
+discovered from data anywhere in this application.** A visual DAG editor would be
+a major product upgrade because the quality of the effect estimates depends on
+making these assumptions visible and editable.
 
-### Intervention Engine
+### What-If Simulation Engine
 
-The intervention engine uses a `GradientBoostingRegressor` to screen one-feature-at-a-time changes:
+A `GradientBoostingRegressor` screens one-feature-at-a-time changes:
 
-- train on numeric predictive features
-- shift one numeric controllable by about one standard deviation
-- hold the rest of the feature matrix fixed
-- clip suggested values using distribution-based bounds
-- rank recommendations by estimated KPI change
-- attach adjusted OLS evidence when available
+- train on the numeric predictive features
+- move one lever by about one standard deviation, clipped to declared physical
+  bounds and the observed range
+- **each row keeps its own observed values for every other column** — only the
+  lever changes, and the change is averaged across rows
+- attach a row-resampling interval that holds the fitted model fixed
+- screen the candidate for feasibility, support and evidence agreement
+- rank only the candidates that pass
 
-This is useful for prioritization, not operational control. It can propose unrealistic changes when variables are physically or operationally coupled because it does not enforce domain-specific constraints beyond simple clipping.
+Every candidate carries a status: `eligible`, `exploratory`, `unsupported`,
+`infeasible`, or `conflicting_evidence`. Only `eligible` results receive a rank
+and appear in the primary list; the rest are returned as diagnostics with the
+reason each was set aside — a rejected candidate is information, not noise.
+
+The feasibility layer checks eligibility, declared physical bounds, observed
+support, documented coupling identities between columns, and categorical
+validity. On the demo this is what catches an independently changed
+`shot_size_g`, which is mechanically determined by cavity count and part weight.
+
+This is useful for prioritization, not operational control. The model is fitted
+and evaluated on the same rows, so magnitudes are optimistic. Coupling
+constraints are checked but not enforced by construction, and only documented
+identities are declared — a variable can still be physically coupled to another
+in a way this application does not know about.
 
 ## Optional Analysis Copilot
 
@@ -149,7 +211,7 @@ Response:
   "citations": [
     {
       "artifact_id": "interventions",
-      "title": "Intervention Recommendations",
+      "title": "Predictive What-If Simulations",
       "kind": "intervention",
       "snippet": "...",
       "score": 0.42,
@@ -165,7 +227,7 @@ Response:
 
 ### RAG Design
 
-- Corpus: dataset schema/profile summary, inferred column types and roles, model metrics, effect estimates, intervention recommendations, EDA correlations, DAG validation, and executive summary.
+- Corpus: dataset schema/profile summary, inferred column types and roles, model metrics and per-model run status, adjusted effect estimates, predictive what-if simulations with their status, EDA correlations, the causal graph and its source, and the executive summary. Each artifact leads with its result type and the caveat attached to it, so the Copilot repeats the caveat rather than the headline.
 - Retrieval: chunked artifacts are vectorized with scikit-learn `HashingVectorizer` and stored in Qdrant.
 - Storage: local Qdrant persistent mode by default through `QDRANT_PATH`; remote Qdrant is supported through env vars.
 - Generation: Groq OpenAI-compatible chat completions when `GROQ_API_KEY` is configured.
@@ -308,44 +370,46 @@ source .venv/bin/activate
 pytest tests/test_wandb_tracking.py -v
 ```
 
-Frontend type check:
+Frontend type check, lint and production build:
 
 ```bash
 cd apps/web
 npm install
 npm run type-check
+npm run lint
+npm run build
 ```
 
-## Repository Polish Notes
-
-The source files in this local repository are normal multi-line files, not minified one-line blobs. Useful checks:
+Regenerate the frontend's copy of the demo ontology after changing
+`apps/api/app/ontology/`. The backend test suite fails if the committed JSON has
+drifted from the Python source:
 
 ```bash
-wc -l apps/api/app/models/pipeline.py \
-  apps/api/app/models/causal.py \
-  apps/api/app/models/intervention.py \
-  apps/api/app/routers/analysis.py \
-  apps/web/package.json
+cd apps/api
+./.venv/bin/python scripts/export_ontology.py
 ```
 
-Expected current result is approximately:
+## Scientific and Architectural Audit
 
-```text
-174 apps/api/app/models/pipeline.py
-131 apps/api/app/models/causal.py
-180 apps/api/app/models/intervention.py
-453 apps/api/app/routers/analysis.py
- 57 apps/web/package.json
-```
+A full audit of this repository and of the original analysis it derives from is
+in [`docs/audit/`](docs/audit/README.md). It is imported verbatim and pinned to
+commit `2bd854f`; it is a record of what was true then, not a live document.
 
-If GitHub raw view shows these as extremely long one-line files, check that the pushed branch matches this local copy and that no generated or copied version replaced the formatted source.
+Corrections made in response, with before/after numbers on the shipped demo, are
+in
+[`docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md`](docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md),
+which also lists what was deliberately deferred.
 
 ## Limitations
 
 - Regression only. Classification support would make the app useful for churn, pass/fail, conversion, default, approval, and defect/no-defect KPIs.
-- No visual DAG editor yet. The default DAG is an assumption generated from column roles, not causal discovery.
-- Effect estimates are observational and may be biased by unobserved confounders.
-- The intervention engine shifts one numeric feature at a time and does not enforce domain-specific process constraints.
+- No visual DAG editor yet. The graph is either declared by a dataset ontology or assumed from column roles. Nothing is discovered from data.
+- Effect estimates are observational and may be biased by unobserved confounders. There are no fixed effects and no cluster-robust standard errors, so intervals are too narrow for clustered panel data.
+- The train/test split is random — not grouped by any entity and not time-ordered — and the winning model is selected on the same held-out set its score is reported on. Both make the reported R2 optimistic.
+- What-if simulations are fitted and evaluated on the same rows. Their intervals resample rows while holding the model fixed, so they exclude model-estimation uncertainty and the true interval is wider.
+- Mediator propagation is not implemented: a lever whose effect runs through a mediator is marked exploratory rather than given a number.
+- Only documented coupling identities are enforced. A variable can still be physically coupled to another in a way the application does not know about.
+- Conditional, cap-only, additive-delta and combined-package interventions are not representable.
 - Categorical controllable interventions are not implemented.
 - No authentication or multi-user isolation.
 - No persistent result history for full analysis runs; frontend state uses session storage, while Copilot retrieval chunks persist in Qdrant storage.

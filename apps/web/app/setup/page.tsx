@@ -10,28 +10,33 @@ import {
 import { useAppStore } from "@/lib/store";
 import { parseCsvFile, loadDemoDataset, DEMO_TARGET } from "@/lib/csv";
 import { runAnalysis, ApiError } from "@/lib/api-client";
-import type { ColumnRole } from "@/lib/types";
+import type { AnalysisMode, ColumnRole } from "@/lib/types";
 
 const ROLES: ColumnRole[] = [
-  "outcome","controllable","confounder","mediator","context","identifier","ignore",
+  "unassigned","outcome","controllable","planning_lever","confounder",
+  "mediator","context","identifier","ignore",
 ];
 const ROLE_COLORS: Record<ColumnRole, string> = {
-  outcome:      "bg-blue-500/20 text-blue-400 border-blue-500/40",
-  controllable: "bg-green-500/20 text-green-400 border-green-500/40",
-  confounder:   "bg-orange-500/20 text-orange-400 border-orange-500/40",
-  mediator:     "bg-purple-500/20 text-purple-400 border-purple-500/40",
-  context:      "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
-  identifier:   "bg-gray-500/20 text-gray-400 border-gray-500/40",
-  ignore:       "bg-gray-500/10 text-gray-500 border-gray-600/20",
+  outcome:        "bg-blue-500/20 text-blue-400 border-blue-500/40",
+  controllable:   "bg-green-500/20 text-green-400 border-green-500/40",
+  planning_lever: "bg-emerald-500/20 text-emerald-400 border-emerald-500/40",
+  confounder:     "bg-orange-500/20 text-orange-400 border-orange-500/40",
+  mediator:       "bg-purple-500/20 text-purple-400 border-purple-500/40",
+  context:        "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
+  identifier:     "bg-gray-500/20 text-gray-400 border-gray-500/40",
+  ignore:         "bg-gray-500/10 text-gray-500 border-gray-600/20",
+  unassigned:     "bg-slate-500/20 text-slate-300 border-slate-500/40",
 };
 const ROLE_HELP: Record<ColumnRole, string> = {
-  outcome:      "The KPI you want to improve",
-  controllable: "Levers you can actually change",
-  confounder:   "Causes both controls and outcome",
-  mediator:     "On the causal path — don't adjust",
-  context:      "Fixed factors per run",
-  identifier:   "ID / timestamp — excluded",
-  ignore:       "Excluded from analysis",
+  outcome:        "The KPI you want to improve",
+  controllable:   "A setpoint you can change directly",
+  planning_lever: "A scheduling decision, not a setpoint",
+  confounder:     "Causes both a lever and the outcome — adjusted for",
+  mediator:       "On the causal path — predictor, never an adjuster",
+  context:        "Fixed per run — adjusted for, never changed",
+  identifier:     "ID / timestamp — excluded",
+  ignore:         "Excluded from analysis",
+  unassigned:     "No causal role stated — predictor only",
 };
 
 const STEPS = [
@@ -44,14 +49,10 @@ const STEPS = [
 const ANALYSIS_MESSAGES = [
   "Parsing dataset…",
   "Building feature matrix…",
-  "Training OLS regression…",
-  "Training Ridge regression…",
-  "Training Random Forest…",
-  "Training XGBoost…",
-  "Training LightGBM…",
-  "Running adjusted effect estimates…",
-  "Computing interventions…",
-  "Building executive summary…",
+  "Training predictive models…",
+  "Estimating adjusted effects…",
+  "Screening what-if simulations…",
+  "Building summary…",
   "Finalising results…",
 ];
 
@@ -80,9 +81,20 @@ export default function SetupPage() {
     return () => { clearInterval(msgTimer); clearInterval(elapsedTimer); };
   }, [analyzing]);
 
+  // The whole CSV is kept in sessionStorage (quota ~5 MB, JSON-escaped) and
+  // POSTed as a JSON string body, so the real ceiling is a few megabytes — not
+  // the 50 MB this page used to advertise.
+  const MAX_CSV_BYTES = 5 * 1024 * 1024;
+
   const handleFile = async (file: File) => {
     if (!file.name.endsWith(".csv")) { toast.error("Please upload a CSV file."); return; }
-    if (file.size > 50 * 1024 * 1024) { toast.error("File too large — max 50 MB."); return; }
+    if (file.size > MAX_CSV_BYTES) {
+      toast.error(
+        "File too large — the limit is about 5 MB, because the file is held in " +
+        "browser storage and sent as a single request body."
+      );
+      return;
+    }
     try {
       const ds = await parseCsvFile(file);
       store.setDataset(ds);
@@ -99,17 +111,60 @@ export default function SetupPage() {
     } catch { toast.error("Failed to load demo"); }
   };
 
+  const levers = store.dataset?.columns.filter(
+    c => c.role === "controllable" || c.role === "planning_lever") ?? [];
+  const confounders  = store.dataset?.columns.filter(
+    c => c.role === "confounder" || c.role === "context") ?? [];
+  const unassigned   = store.dataset?.columns.filter(c => c.role === "unassigned") ?? [];
+  const causalMode   = store.analysisMode === "causal";
+
+  /**
+   * Client-side preflight, mirroring the API's own validation.
+   *
+   * The point is that the user is told what is missing *before* submitting, and
+   * told which columns to change. The API validates independently — this is a
+   * courtesy, not the gate.
+   */
+  const configProblems = (): { message: string; remedy: string }[] => {
+    const problems: { message: string; remedy: string }[] = [];
+    if (!store.dataset) return problems;
+    if (!store.target) {
+      problems.push({
+        message: "No outcome column selected.",
+        remedy: "Pick the numeric KPI you want to move in step 2.",
+      });
+    }
+    if (causalMode && levers.length === 0) {
+      problems.push({
+        message: "Causal estimation needs a treatment, and no column is labelled as one.",
+        remedy:
+          "Label at least one column 'controllable' (a setpoint you can change) or " +
+          "'planning_lever' (a scheduling decision). If you do not have one, switch " +
+          "to descriptive & predictive mode below — it makes no causal claims.",
+      });
+    }
+    if (causalMode && levers.length > 0 && confounders.length === 0) {
+      problems.push({
+        message: "No column is labelled 'confounder' or 'context'.",
+        remedy:
+          "Effect estimates would be unadjusted. Label the variables that plausibly " +
+          "cause both your treatment and your outcome.",
+      });
+    }
+    return problems;
+  };
+
+  const problems = configProblems();
+  const canAnalyze = problems.length === 0;
+
   const currentStep = (): number => {
     if (!store.dataset) return 1;
     if (!store.target) return 2;
-    const hasControllable = store.dataset.columns.some(c => c.role === "controllable");
-    if (!hasControllable) return 3;
+    if (!canAnalyze) return 3;
     return 4;
   };
 
   const step = currentStep();
-  const controllable = store.dataset?.columns.filter(c => c.role === "controllable") ?? [];
-  const confounders  = store.dataset?.columns.filter(c => c.role === "confounder")  ?? [];
 
   const handleAnalyze = async () => {
     if (!store.dataset || !store.target) return;
@@ -145,6 +200,7 @@ export default function SetupPage() {
         target: store.target,
         task: "regression",
         improve_direction: store.improveDirection,
+        analysis_mode: store.analysisMode,
         column_roles,
         dag_edges: store.dagEdges,
         random_seed: 42,
@@ -158,11 +214,23 @@ export default function SetupPage() {
       if (err instanceof Error && err.name === "AbortError") {
         msg = "Request timed out after 90s. The server may be under load — try again.";
       } else if (err instanceof ApiError) {
-        const detail = err.detail as { detail?: { code?: string; errors?: string[] } } | undefined;
+        const detail = err.detail as {
+          detail?: {
+            code?: string;
+            errors?: string[];
+            problems?: { message: string; remedy: string }[];
+          };
+        } | undefined;
+        const code = detail?.detail?.code;
         const validationErrors = detail?.detail?.errors;
-        msg = detail?.detail?.code === "INVALID_DAG" && validationErrors?.length
-          ? `Invalid causal graph: ${validationErrors.join(" ")}`
-          : `Server error: ${err.message}`;
+        const configProblems = detail?.detail?.problems;
+        if (code === "INVALID_DAG" && validationErrors?.length) {
+          msg = `Invalid causal graph: ${validationErrors.join(" ")}`;
+        } else if (code === "INVALID_ANALYSIS_CONFIGURATION" && configProblems?.length) {
+          msg = configProblems.map(p => `${p.message} ${p.remedy}`).join(" ");
+        } else {
+          msg = `Server error: ${err.message}`;
+        }
       } else if (err instanceof Error) {
         msg = err.message;
       }
@@ -226,7 +294,15 @@ export default function SetupPage() {
           >
             <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
             <p className="font-semibold mb-1">Drop a CSV file or click to browse</p>
-            <p className="text-sm text-muted-foreground mb-5">Max 50 MB · numeric and categorical columns supported</p>
+            <p className="text-sm text-muted-foreground mb-2">
+              Up to ~5 MB (browser storage limit) · numeric and categorical columns supported
+            </p>
+            <p className="text-xs text-muted-foreground mb-5 max-w-md mx-auto leading-relaxed">
+              Bringing your own data is an advanced path, not automatic causal
+              inference. You choose the outcome and say which columns are levers
+              and which are confounders — nothing here discovers a causal
+              structure for you.
+            </p>
             <button
               onClick={e => { e.stopPropagation(); handleDemo(); }}
               className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
@@ -253,9 +329,12 @@ export default function SetupPage() {
                 </div>
               </div>
               <div className="flex gap-2 text-xs flex-wrap">
-                <Chip color="green">{controllable.length} controllable</Chip>
-                <Chip color="orange">{confounders.length} confounder</Chip>
-                {store.target && <Chip color="blue">target: {store.target}</Chip>}
+                <Chip color="green">{levers.length} lever</Chip>
+                <Chip color="orange">{confounders.length} adjuster</Chip>
+                {unassigned.length > 0 && (
+                  <Chip color="slate">{unassigned.length} unassigned</Chip>
+                )}
+                {store.target && <Chip color="blue">outcome: {store.target}</Chip>}
               </div>
             </div>
 
@@ -264,8 +343,8 @@ export default function SetupPage() {
               step={2}
               active={step === 2}
               done={!!store.target}
-              title="Select your target KPI"
-              subtitle="The numeric column you want to improve."
+              title="Select your outcome and what you are asking"
+              subtitle="The numeric column you want to move, and whether you are asking a causal question at all."
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div>
@@ -301,6 +380,40 @@ export default function SetupPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Analysis mode — a causal question has to be asked deliberately */}
+              <div className="mt-4">
+                <label className="block text-xs font-semibold mb-2 text-muted-foreground uppercase tracking-wide">
+                  What are you asking?
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {([
+                    {
+                      id: "causal" as AnalysisMode,
+                      title: "Causal question",
+                      body: "Estimate adjusted effects and screen candidate changes. Requires you to name a treatment and its confounders.",
+                    },
+                    {
+                      id: "descriptive_predictive" as AnalysisMode,
+                      title: "Descriptive & predictive only",
+                      body: "Explore the data and fit predictive models. No effect estimates, no candidate actions, no causal claims.",
+                    },
+                  ]).map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => store.setAnalysisMode(m.id)}
+                      className={`text-left p-3 rounded-lg border transition-colors ${
+                        store.analysisMode === m.id
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:bg-accent"
+                      }`}
+                    >
+                      <p className="text-sm font-medium">{m.title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{m.body}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </Section>
 
             {/* ── STEP 3: Roles ──────────────────────────────────────────── */}
@@ -309,7 +422,11 @@ export default function SetupPage() {
               active={step === 3}
               done={step >= 4}
               title="Assign column roles"
-              subtitle={`Set at least one column to controllable — these are the levers the engine will recommend. Currently ${controllable.length} controllable.`}
+              subtitle={
+                causalMode
+                  ? `Uploaded columns start unassigned — being numeric is not a causal role. Name your levers and your confounders. Currently ${levers.length} lever(s), ${confounders.length} adjuster(s), ${unassigned.length} unassigned.`
+                  : `Roles are optional in descriptive & predictive mode: unassigned columns are used as predictors. Currently ${unassigned.length} unassigned.`
+              }
             >
               <div className="mt-4 rounded-lg border border-border/60 overflow-hidden">
                 <div className="overflow-x-auto">
@@ -371,14 +488,43 @@ export default function SetupPage() {
               active={step === 4}
               done={false}
               title="Run analysis"
-              subtitle="Trains 5 models, runs adjusted effect estimates, and generates intervention recommendations."
+              subtitle={
+                causalMode
+                  ? "Trains the available predictive models, estimates adjusted effects, and screens what-if simulations for feasibility and support."
+                  : "Trains the available predictive models and summarises the data. No effect estimates and no candidate actions."
+              }
             >
               {/* Checklist */}
               <div className="mt-4 space-y-1.5">
-                <Check ok={!!store.target}        label={store.target ? `Target: ${store.target}` : "No target selected"} />
-                <Check ok={controllable.length>0} label={`${controllable.length} controllable variable${controllable.length!==1?"s":""}`} />
-                <Check ok={confounders.length>0}  label={`${confounders.length} confounder${confounders.length!==1?"s":""} — improves adjusted estimates`} warn />
+                <Check ok={!!store.target} label={store.target ? `Outcome: ${store.target}` : "No outcome selected"} />
+                {causalMode && (
+                  <>
+                    <Check ok={levers.length > 0}
+                      label={`${levers.length} treatment / lever column${levers.length !== 1 ? "s" : ""}`} />
+                    <Check ok={confounders.length > 0}
+                      label={`${confounders.length} adjuster${confounders.length !== 1 ? "s" : ""} (confounder or context) — without these, estimates are unadjusted`} />
+                  </>
+                )}
+                {unassigned.length > 0 && (
+                  <Check ok warn
+                    label={`${unassigned.length} column(s) unassigned — used as predictors, never as adjusters`} />
+                )}
               </div>
+
+              {/* What is still missing, and how to fix it */}
+              {problems.length > 0 && (
+                <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 space-y-2">
+                  {problems.map((p, i) => (
+                    <div key={i} className="flex gap-2 text-xs">
+                      <AlertCircle className="h-3.5 w-3.5 text-yellow-400 shrink-0 mt-0.5" />
+                      <span>
+                        <strong className="text-yellow-400">{p.message}</strong>{" "}
+                        <span className="text-muted-foreground">{p.remedy}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Error */}
               {analyzeError && (
@@ -400,7 +546,7 @@ export default function SetupPage() {
                       </p>
                     </div>
                   </div>
-                  {/* Progress bar */}
+                  {/* Indicative only — this tracks elapsed time, not server progress. */}
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                     <div
                       className="h-full bg-primary rounded-full transition-all duration-1000"
@@ -408,7 +554,12 @@ export default function SetupPage() {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Running: OLS · Ridge · Random Forest · XGBoost · LightGBM + adjusted effect estimates
+                    Attempting OLS, Ridge, Random Forest, and — where their libraries
+                    are available in this deployment — XGBoost and LightGBM. The
+                    results page reports which ones actually ran.
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    The bar above tracks elapsed time, not server progress.
                   </p>
                 </div>
               )}
@@ -416,7 +567,7 @@ export default function SetupPage() {
               {!analyzing && (
                 <button
                   onClick={handleAnalyze}
-                  disabled={!store.target || controllable.length === 0}
+                  disabled={!canAnalyze}
                   className="mt-5 inline-flex items-center gap-2 h-11 px-8 rounded-lg bg-primary text-primary-foreground font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
                 >
                   Run Analysis <ArrowRight className="h-4 w-4" />
@@ -478,6 +629,7 @@ function Chip({ children, color }: { children: React.ReactNode; color: string })
     green:  "bg-green-500/10 text-green-400 border-green-500/30",
     orange: "bg-orange-500/10 text-orange-400 border-orange-500/30",
     blue:   "bg-blue-500/10 text-blue-400 border-blue-500/30",
+    slate:  "bg-slate-500/10 text-slate-300 border-slate-500/30",
   };
   return <span className={`rounded-full border px-2 py-0.5 text-xs ${map[color]??""}`}>{children}</span>;
 }

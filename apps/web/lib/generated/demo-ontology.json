@@ -1,0 +1,1096 @@
+{
+  "_generated": "Generated from apps/api/app/ontology/ by apps/api/scripts/export_ontology.py. Do not edit by hand \u2014 edit the Python source and regenerate.",
+  "dataset_id": "injection_molding_demo",
+  "version": "injection-molding-2026.1",
+  "title": "Injection Moulding \u2014 curated demo",
+  "target": "scrap_rate_pct",
+  "provenance": "Causal roles and adjustment sets from datathon-CUB-2026/src/utils.py (stated to match paper section 2.1); labels, units and declared ranges from data/injection_molding_ontology.json; physical lever bounds from src/intervention_helpers.py; observed ranges measured on the 5,000-row demo CSV shipped with this application.",
+  "graph_assumption": "This graph is a domain-informed causal assumption taken from the source study's ontology and adjustment sets. It was not discovered from data and is not proven. Every effect estimate below is valid only if this graph is correct and there is no important unmeasured confounding.",
+  "variables": [
+    {
+      "name": "scrap_rate_pct",
+      "label": "Scrap Rate",
+      "unit": "percent",
+      "description": "Share of parts scrapped in the 30-minute interval.",
+      "causal_role": "outcome",
+      "column_role": "outcome",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        0.0,
+        10.0
+      ],
+      "observed_range": [
+        0.931,
+        8.463
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Pass/fail threshold in the source study is 3.2 %; 78 % of intervals fail it."
+    },
+    {
+      "name": "cooling_time_s",
+      "label": "Cooling Time",
+      "unit": "seconds",
+      "description": "In-mould cooling time per cycle.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        5.0,
+        40.0
+      ],
+      "observed_range": [
+        7.19,
+        27.29
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "The dataset's headline lever. Raw correlation with scrap is positive because operators extend cooling in response to observed mould temperature; the adjusted estimate reverses sign. mold_temperature_c is therefore a required adjuster, not an optional one."
+    },
+    {
+      "name": "mold_temperature_c",
+      "label": "Mould Temperature",
+      "unit": "degC",
+      "description": "Mould surface temperature setpoint.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        40.0,
+        110.0
+      ],
+      "observed_range": [
+        35.0,
+        95.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Also the confounder that opens the back-door path for cooling time. Observed minimum (35 degC) sits below the declared process floor (40 degC)."
+    },
+    {
+      "name": "barrel_temperature_c",
+      "label": "Barrel Temperature",
+      "unit": "degC",
+      "description": "Melt temperature setpoint in the barrel.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        180.0,
+        310.0
+      ],
+      "observed_range": [
+        196.58,
+        281.16
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "injection_pressure_bar",
+      "label": "Injection Pressure",
+      "unit": "bar",
+      "description": "Peak pressure during the filling phase.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        600.0,
+        1800.0
+      ],
+      "observed_range": [
+        689.34,
+        1665.77
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "The source study conditions its pressure recommendation on tool_wear_index >= 0.45. Conditional interventions are not representable in this API yet, so the unconditional estimate is shown and the condition is not applied."
+    },
+    {
+      "name": "hold_pressure_bar",
+      "label": "Hold Pressure",
+      "unit": "bar",
+      "description": "Packing pressure applied after the filling phase.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        300.0,
+        1200.0
+      ],
+      "observed_range": [
+        390.85,
+        1045.92
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": "conflicting",
+      "role_source": "paper_taxonomy",
+      "notes": "Evidence is specification-dependent and is not settled. The source analysis estimates a small negative coefficient whose 95 % interval crosses zero and excludes the lever from its action package on those grounds; this application's earlier specification produced a positive, nominally significant coefficient. Changing the adjustment set changes the conclusion, so no direction is asserted here. Resolving it requires the estimator work deferred to a later phase."
+    },
+    {
+      "name": "screw_speed_rpm",
+      "label": "Screw Speed",
+      "unit": "rpm",
+      "description": "Screw rotation speed during plasticising.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        20.0,
+        150.0
+      ],
+      "observed_range": [
+        37.4,
+        108.15
+      ],
+      "categories": null,
+      "intervention_eligibility": "eligible",
+      "evidence_status": "conflicting",
+      "role_source": "paper_taxonomy",
+      "notes": "The adjusted estimate is specification-dependent: it stays negative and significant on this declared set across seeds and on the full 5,000-row dataset (so subsampling does not explain it), but adding product_variant \u2014 which the source study absorbs as a fixed effect on every regression, not as a declared backdoor adjuster for this lever \u2014 moves it to the source's reported near-zero, insignificant result. Fixed effects are Phase 2 scope and are not implemented here, so this application and the source study currently answer slightly different adjusted questions for this lever. See docs/implementation/PHASE_1A_TRUTH_IN_LABELLING.md \u00a78."
+    },
+    {
+      "name": "dryer_dewpoint_c",
+      "label": "Dryer Dew Point",
+      "unit": "degC",
+      "description": "Dew point of the resin dryer's air circuit.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        -50.0,
+        -20.0
+      ],
+      "observed_range": [
+        -48.0,
+        -24.63
+      ],
+      "categories": null,
+      "intervention_eligibility": "mediated_unsupported",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A lever in the source taxonomy, and the entry point to the moisture pathway. Its effect reaches scrap only through resin_moisture_pct, so a what-if that moves the dew point while holding measured moisture fixed understates it roughly threefold. Mediator propagation is not implemented in this phase, so simulations for this lever are marked unsupported rather than reported as intervention estimates. The adjusted total-effect estimate is unaffected and is shown. The challenge ontology JSON labels this variable a mediator; the paper taxonomy labels it a controllable lever, and the paper taxonomy is used here."
+    },
+    {
+      "name": "shot_size_g",
+      "label": "Shot Size",
+      "unit": "grams",
+      "description": "Mass of material injected per cycle.",
+      "causal_role": "process_lever",
+      "column_role": "controllable",
+      "controllable": true,
+      "derived": true,
+      "mediator": false,
+      "valid_range": [
+        50.0,
+        2000.0
+      ],
+      "observed_range": [
+        24.21,
+        1734.84
+      ],
+      "categories": null,
+      "intervention_eligibility": "derived_constrained",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Nominally a setpoint, but mechanically determined by the tooling: shot size must cover cavity_count x part_weight_g plus runner and cushion. Measured ratio to that product is 0.972-1.214 across the demo (correlation 0.9989). It therefore cannot be moved independently while cavity count and part weight are held fixed, and any simulation that does so is a short shot for most rows."
+    },
+    {
+      "name": "maintenance_days_since_last",
+      "label": "Days Since Last Maintenance",
+      "unit": "days",
+      "description": "Interval since the machine's last maintenance event.",
+      "causal_role": "planning_lever",
+      "column_role": "planning_lever",
+      "controllable": true,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        1.0,
+        60.0
+      ],
+      "observed_range": [
+        0.0,
+        57.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "preliminary",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A scheduling decision, not a per-interval setpoint: it is set by maintenance policy over days, not by an operator at the machine. Its effect runs through calibration_drift_index, whose propagation is not implemented in this phase, so simulations are preliminary. The adjusted total-effect estimate is shown. The challenge ontology JSON labels this a confounder; the paper taxonomy labels it a planning lever."
+    },
+    {
+      "name": "resin_moisture_pct",
+      "label": "Resin Moisture",
+      "unit": "percent",
+      "description": "Moisture content of the resin entering the barrel.",
+      "causal_role": "mediator",
+      "column_role": "mediator",
+      "controllable": false,
+      "derived": false,
+      "mediator": true,
+      "valid_range": [
+        0.005,
+        0.3
+      ],
+      "observed_range": [
+        0.005,
+        0.3
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Carries the dryer dew-point effect to scrap via splay defects. Conditioning on it turns a total effect into a direct effect, so it must never appear in a total-effect adjustment set. This application previously labelled it a confounder and adjusted for it everywhere."
+    },
+    {
+      "name": "calibration_drift_index",
+      "label": "Calibration Drift Index",
+      "unit": "index",
+      "description": "Accumulated drift of the machine's calibration.",
+      "causal_role": "mediator",
+      "column_role": "mediator",
+      "controllable": false,
+      "derived": false,
+      "mediator": true,
+      "valid_range": [
+        0.0,
+        1.0
+      ],
+      "observed_range": [
+        0.0,
+        0.772
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Carries the maintenance-interval effect to scrap."
+    },
+    {
+      "name": "tool_wear_index",
+      "label": "Tool Wear Index",
+      "unit": "index",
+      "description": "Accumulated wear state of the mould/tool.",
+      "causal_role": "mediator",
+      "column_role": "mediator",
+      "controllable": false,
+      "derived": false,
+      "mediator": true,
+      "valid_range": [
+        0.0,
+        1.0
+      ],
+      "observed_range": [
+        0.0,
+        0.731
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Mediator in the paper taxonomy, and the conditioning variable for the source study's pressure rule. The source nonetheless adjusts for it when estimating pressure effects, treating it there as a prior wear state; see SOURCE_DEVIATIONS."
+    },
+    {
+      "name": "ambient_humidity_pct",
+      "label": "Ambient Relative Humidity",
+      "unit": "percent",
+      "description": "Shop-floor relative humidity during the interval.",
+      "causal_role": "confounder",
+      "column_role": "confounder",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        30.0,
+        88.0
+      ],
+      "observed_range": [
+        39.06,
+        88.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Environmental, not a lever: it is not controllable at interval granularity."
+    },
+    {
+      "name": "ambient_temperature_c",
+      "label": "Ambient Temperature",
+      "unit": "degC",
+      "description": "Shop-floor temperature during the interval.",
+      "causal_role": "confounder",
+      "column_role": "confounder",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        17.0,
+        34.0
+      ],
+      "observed_range": [
+        17.0,
+        34.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "operator_shift",
+      "label": "Operator Shift",
+      "unit": null,
+      "description": "Which shift was running the machine.",
+      "causal_role": "confounder",
+      "column_role": "confounder",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": [
+        "A_Day",
+        "B_Evening",
+        "C_Night"
+      ],
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A named confounder in the source study, absorbed there as a fixed effect. This application encodes it ordinally, which is a known limitation deferred to a later phase."
+    },
+    {
+      "name": "resin_batch_quality_index",
+      "label": "Resin Batch Quality Index",
+      "unit": "index",
+      "description": "Quality index of the resin lot in use.",
+      "causal_role": "batch_covariate",
+      "column_role": "confounder",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        0.75,
+        1.05
+      ],
+      "observed_range": [
+        0.835,
+        1.05
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "cavity_count",
+      "label": "Cavity Count",
+      "unit": "count",
+      "description": "Number of cavities in the mould.",
+      "causal_role": "context",
+      "column_role": "context",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        1.0,
+        8.0
+      ],
+      "observed_range": [
+        1.0,
+        8.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A property of the mould. Changing it means changing tooling, not a setpoint."
+    },
+    {
+      "name": "part_weight_g",
+      "label": "Part Weight",
+      "unit": "grams",
+      "description": "Nominal weight of one moulded part.",
+      "causal_role": "context",
+      "column_role": "context",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        15.0,
+        230.0
+      ],
+      "observed_range": [
+        22.75,
+        192.02
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A fixed design property of the part, and an adjuster in three of the source study's adjustment sets. It cannot be a mediator of a process setpoint, which is how this application previously classified it \u2014 with the effect that it was dropped from every adjustment set."
+    },
+    {
+      "name": "clamp_force_kn",
+      "label": "Clamp Force",
+      "unit": "kN",
+      "description": "Clamping force applied to hold the mould closed.",
+      "causal_role": "context",
+      "column_role": "context",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        500.0,
+        4400.0
+      ],
+      "observed_range": [
+        1698.71,
+        4400.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Explicitly not a controllable lever in the source study: clamp force follows from tonnage requirement, which follows from mould and part geometry. This application previously offered it as a lever and ranked it. The source also clips it at 4400 kN as sensor noise; the observed maximum here is exactly 4400."
+    },
+    {
+      "name": "product_variant",
+      "label": "Product Variant",
+      "unit": null,
+      "description": "Part family being produced.",
+      "causal_role": "context",
+      "column_role": "context",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": [
+        "V_CONNECTOR_F",
+        "V_COVER_H",
+        "V_FILTER_FRAME_G",
+        "V_HANDLE_E",
+        "V_HOUSING_A",
+        "V_HOUSING_B",
+        "V_NOZZLE_C",
+        "V_PUMP_CAP_D"
+      ],
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "operator_experience_level",
+      "label": "Operator Experience Level",
+      "unit": "1-7 scale",
+      "description": "Experience band of the operator on shift.",
+      "causal_role": "operator_covariate",
+      "column_role": "context",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        1.0,
+        7.0
+      ],
+      "observed_range": [
+        1.0,
+        7.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Adjusted for, never a target. The source study warns that its positive coefficient reflects assignment bias \u2014 experienced operators are put on harder jobs \u2014 and explicitly does not recommend reassignment."
+    },
+    {
+      "name": "timestamp",
+      "label": "Timestamp",
+      "unit": "ISO-8601",
+      "description": "Start of the 30-minute production interval.",
+      "causal_role": "identifier",
+      "column_role": "identifier",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "plant_id",
+      "label": "Plant",
+      "unit": null,
+      "description": "Production site.",
+      "causal_role": "identifier",
+      "column_role": "identifier",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": [
+        "DE_OBERSONT",
+        "DE_WINNENDEN",
+        "RO_CURTEA",
+        "VN_QUANGNAM"
+      ],
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "machine_id",
+      "label": "Injection Moulding Machine",
+      "unit": null,
+      "description": "Machine identifier.",
+      "causal_role": "identifier",
+      "column_role": "identifier",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Absorbed as a fixed effect in the source study. This application drops it; mean scrap ranges 3.82-5.53 % between machines, so the panel structure is currently unmodelled. Deferred to a later phase."
+    },
+    {
+      "name": "mold_id",
+      "label": "Mould",
+      "unit": null,
+      "description": "Mould/tool identifier.",
+      "causal_role": "identifier",
+      "column_role": "identifier",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "resin_lot_id",
+      "label": "Resin Lot",
+      "unit": null,
+      "description": "Resin lot identifier.",
+      "causal_role": "identifier",
+      "column_role": "identifier",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "cycle_time_s",
+      "label": "Cycle Time",
+      "unit": "seconds",
+      "description": "Total cycle time for the interval.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        16.0,
+        95.0
+      ],
+      "observed_range": [
+        16.0,
+        95.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Mechanically subsumes cooling_time_s, so using it as a predictor is target leakage for any cooling-time question. It is also the denominator of the study's throughput trade-off. This application previously labelled it a mediator, which happened to exclude it from the feature matrix \u2014 but only incidentally."
+    },
+    {
+      "name": "scrap_count",
+      "label": "Scrap Count",
+      "unit": "count",
+      "description": "Number of scrapped parts in the interval.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        0.0,
+        100.0
+      ],
+      "observed_range": [
+        0.0,
+        33.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Numerator of the target. Using it as a predictor is circular."
+    },
+    {
+      "name": "parts_produced",
+      "label": "Parts Produced",
+      "unit": "count",
+      "description": "Parts produced in the interval.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        10.0,
+        800.0
+      ],
+      "observed_range": [
+        34.0,
+        458.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Denominator of the target."
+    },
+    {
+      "name": "energy_kwh_interval",
+      "label": "Energy Use per Interval",
+      "unit": "kWh",
+      "description": "Energy consumed during the interval.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        5.0,
+        28.0
+      ],
+      "observed_range": [
+        9.45,
+        28.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": ""
+    },
+    {
+      "name": "defect_type",
+      "label": "Dominant Defect Type",
+      "unit": null,
+      "description": "Dominant defect class observed in the interval.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": null,
+      "observed_range": null,
+      "categories": [
+        "burn_mark",
+        "dimensional_deviation",
+        "flash",
+        "none",
+        "short_shot",
+        "sink_mark",
+        "splay_moisture",
+        "warpage"
+      ],
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "Downstream of both the process settings and the same latent defect intensity that drives scrap. Never conditioned on."
+    },
+    {
+      "name": "pass_fail_flag",
+      "label": "Pass / Fail Flag",
+      "unit": "0/1",
+      "description": "Whether the interval passed the 3.2 % scrap threshold.",
+      "causal_role": "post_treatment_outcome",
+      "column_role": "ignore",
+      "controllable": false,
+      "derived": false,
+      "mediator": false,
+      "valid_range": [
+        0.0,
+        1.0
+      ],
+      "observed_range": [
+        0.0,
+        1.0
+      ],
+      "categories": null,
+      "intervention_eligibility": "not_eligible",
+      "evidence_status": null,
+      "role_source": "paper_taxonomy",
+      "notes": "A deterministic function of the target."
+    }
+  ],
+  "column_roles": {
+    "scrap_rate_pct": "outcome",
+    "cooling_time_s": "controllable",
+    "mold_temperature_c": "controllable",
+    "barrel_temperature_c": "controllable",
+    "injection_pressure_bar": "controllable",
+    "hold_pressure_bar": "controllable",
+    "screw_speed_rpm": "controllable",
+    "dryer_dewpoint_c": "controllable",
+    "shot_size_g": "controllable",
+    "maintenance_days_since_last": "planning_lever",
+    "resin_moisture_pct": "mediator",
+    "calibration_drift_index": "mediator",
+    "tool_wear_index": "mediator",
+    "ambient_humidity_pct": "confounder",
+    "ambient_temperature_c": "confounder",
+    "operator_shift": "confounder",
+    "resin_batch_quality_index": "confounder",
+    "cavity_count": "context",
+    "part_weight_g": "context",
+    "clamp_force_kn": "context",
+    "product_variant": "context",
+    "operator_experience_level": "context",
+    "timestamp": "identifier",
+    "plant_id": "identifier",
+    "machine_id": "identifier",
+    "mold_id": "identifier",
+    "resin_lot_id": "identifier",
+    "cycle_time_s": "ignore",
+    "scrap_count": "ignore",
+    "parts_produced": "ignore",
+    "energy_kwh_interval": "ignore",
+    "defect_type": "ignore",
+    "pass_fail_flag": "ignore"
+  },
+  "adjustment_sets": {
+    "barrel_temperature_c": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "injection_pressure_bar",
+      "mold_temperature_c",
+      "resin_batch_quality_index"
+    ],
+    "cooling_time_s": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "maintenance_days_since_last",
+      "mold_temperature_c",
+      "part_weight_g",
+      "shot_size_g"
+    ],
+    "dryer_dewpoint_c": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c"
+    ],
+    "hold_pressure_bar": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "injection_pressure_bar"
+    ],
+    "injection_pressure_bar": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "barrel_temperature_c",
+      "clamp_force_kn",
+      "hold_pressure_bar",
+      "part_weight_g",
+      "resin_batch_quality_index"
+    ],
+    "maintenance_days_since_last": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c"
+    ],
+    "mold_temperature_c": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "barrel_temperature_c",
+      "part_weight_g"
+    ],
+    "screw_speed_rpm": [
+      "ambient_humidity_pct",
+      "ambient_temperature_c",
+      "barrel_temperature_c",
+      "shot_size_g"
+    ]
+  },
+  "source_deviations": {
+    "hold_pressure_bar": "tool_wear_index was dropped from the source's adjustment set, for the same reason as injection_pressure_bar.",
+    "injection_pressure_bar": "tool_wear_index was dropped from the source's adjustment set. It is a mediator in the same source's taxonomy, and this application enforces that no mediator enters a total-effect adjustment set. The source treats it here as a prior wear state instead; deciding between the two readings needs temporal ordering that 30-minute intervals cannot supply.",
+    "mold_temperature_c": "cooling_time_s was dropped from the source's adjustment set. The graph used here encodes mold_temperature_c -> cooling_time_s (operators extend cooling in response to observed mould temperature), which makes cooling time a descendant of this lever; adjusting for it would be post-treatment conditioning. The source declares both directions across its two sets, which no single acyclic graph can satisfy."
+  },
+  "edges": [
+    {
+      "source": "ambient_humidity_pct",
+      "target": "dryer_dewpoint_c"
+    },
+    {
+      "source": "ambient_humidity_pct",
+      "target": "resin_moisture_pct"
+    },
+    {
+      "source": "ambient_humidity_pct",
+      "target": "calibration_drift_index"
+    },
+    {
+      "source": "ambient_humidity_pct",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "ambient_humidity_pct",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "dryer_dewpoint_c"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "resin_moisture_pct"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "calibration_drift_index"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "mold_temperature_c"
+    },
+    {
+      "source": "ambient_temperature_c",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "operator_shift",
+      "target": "calibration_drift_index"
+    },
+    {
+      "source": "operator_shift",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "operator_shift",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "operator_experience_level",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "operator_experience_level",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "resin_batch_quality_index",
+      "target": "resin_moisture_pct"
+    },
+    {
+      "source": "resin_batch_quality_index",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "product_variant",
+      "target": "cavity_count"
+    },
+    {
+      "source": "product_variant",
+      "target": "part_weight_g"
+    },
+    {
+      "source": "product_variant",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "cavity_count",
+      "target": "shot_size_g"
+    },
+    {
+      "source": "cavity_count",
+      "target": "clamp_force_kn"
+    },
+    {
+      "source": "cavity_count",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "shot_size_g"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "clamp_force_kn"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "mold_temperature_c"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "injection_pressure_bar"
+    },
+    {
+      "source": "part_weight_g",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "clamp_force_kn",
+      "target": "tool_wear_index"
+    },
+    {
+      "source": "clamp_force_kn",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "maintenance_days_since_last",
+      "target": "calibration_drift_index"
+    },
+    {
+      "source": "maintenance_days_since_last",
+      "target": "tool_wear_index"
+    },
+    {
+      "source": "maintenance_days_since_last",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "maintenance_days_since_last",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "mold_temperature_c",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "shot_size_g",
+      "target": "cooling_time_s"
+    },
+    {
+      "source": "shot_size_g",
+      "target": "screw_speed_rpm"
+    },
+    {
+      "source": "dryer_dewpoint_c",
+      "target": "resin_moisture_pct"
+    },
+    {
+      "source": "barrel_temperature_c",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "mold_temperature_c",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "injection_pressure_bar",
+      "target": "tool_wear_index"
+    },
+    {
+      "source": "injection_pressure_bar",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "hold_pressure_bar",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "screw_speed_rpm",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "shot_size_g",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "cooling_time_s",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "cooling_time_s",
+      "target": "cycle_time_s"
+    },
+    {
+      "source": "resin_moisture_pct",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "calibration_drift_index",
+      "target": "scrap_rate_pct"
+    },
+    {
+      "source": "tool_wear_index",
+      "target": "scrap_rate_pct"
+    }
+  ],
+  "derived_relationships": [
+    {
+      "target": "shot_size_g",
+      "inputs": [
+        "cavity_count",
+        "part_weight_g"
+      ],
+      "ratio_lo": 0.95,
+      "ratio_hi": 1.24,
+      "description": "Shot size must cover cavity_count x part_weight_g plus runner and cushion. Measured ratio across the demo is 0.972-1.214 (correlation 0.9989). A shot below the cavity requirement is a short shot, which is itself one of the dataset's defect classes.",
+      "max_violation_share": 0.05
+    }
+  ]
+}

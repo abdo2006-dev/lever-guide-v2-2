@@ -103,13 +103,16 @@ def track_analysis_run(
                     "display_name": result.display_name,
                     "is_winner": result.is_winner,
                     "r2": metrics.get("r2"),
-                    "adjusted_r2": metrics.get("adjusted_r2"),
+                    # Field names must match ModelMetrics in schemas.py. They
+                    # previously read adjusted_r2/train_rows/test_rows, which do
+                    # not exist there, so all three columns logged as null.
+                    "adjusted_r2": metrics.get("adj_r2"),
                     "rmse": metrics.get("rmse"),
                     "mae": metrics.get("mae"),
                     "cv_r2_mean": metrics.get("cv_r2_mean"),
                     "cv_r2_std": metrics.get("cv_r2_std"),
-                    "train_rows": metrics.get("train_rows"),
-                    "test_rows": metrics.get("test_rows"),
+                    "train_rows": metrics.get("n_train"),
+                    "test_rows": metrics.get("n_test"),
                 }
             )
 

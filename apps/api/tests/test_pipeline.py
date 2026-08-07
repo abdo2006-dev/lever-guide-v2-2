@@ -142,10 +142,12 @@ def test_pipeline_returns_results(sample_df):
     X, y, names, _ = build_feature_matrix(
         sample_df, ["pressure", "temperature"], "scrap_rate"
     )
-    results = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
+    results, statuses = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
     assert len(results) >= 1
     winner = [r for r in results if r.is_winner]
     assert len(winner) == 1
+    # Every configured model is accounted for, whether or not it ran.
+    assert {s.model for s in statuses} == {"ols", "ridge", "rf", "xgb", "lgbm"}
 
 
 def test_pipeline_winner_has_best_r2(sample_df):
@@ -154,7 +156,7 @@ def test_pipeline_winner_has_best_r2(sample_df):
     X, y, names, _ = build_feature_matrix(
         sample_df, ["pressure", "temperature"], "scrap_rate"
     )
-    results = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
+    results, _ = run_predictive_pipeline(X, y, names, task="regression", run_cv=False)
     winner = next(r for r in results if r.is_winner)
     for r in results:
         assert winner.metrics.r2 >= r.metrics.r2
@@ -169,7 +171,7 @@ def test_causal_analysis_runs(sample_df):
         DagEdge(source="pressure", target="scrap_rate"),
         DagEdge(source="temperature", target="scrap_rate"),
     ]
-    effects = run_causal_analysis(
+    effects, excluded = run_causal_analysis(
         df=sample_df,
         target="scrap_rate",
         controllable=["pressure", "temperature"],
@@ -179,6 +181,7 @@ def test_causal_analysis_runs(sample_df):
         dag_edges=edges,
     )
     assert isinstance(effects, list)
+    assert isinstance(excluded, list)
 
 
 def test_causal_analysis_excludes_mediators():
@@ -194,7 +197,7 @@ def test_causal_analysis_excludes_mediators():
         DagEdge(source="pressure", target="mediator"),
         DagEdge(source="mediator", target="outcome"),
     ]
-    effects = run_causal_analysis(
+    effects, _excluded = run_causal_analysis(
         df=df,
         target="outcome",
         controllable=["pressure"],
@@ -345,7 +348,9 @@ def test_analyze_rejects_non_numeric_target():
         "random_seed": 42,
     })
     assert resp.status_code == 422
-    assert "must contain at least 30 numeric" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert detail["code"] == "TARGET_INSUFFICIENT_ROWS"
+    assert "at least 30 numeric" in detail["message"]
 
 
 def test_analyze_rejects_constant_target():
@@ -367,7 +372,9 @@ def test_analyze_rejects_constant_target():
         "random_seed": 42,
     })
     assert resp.status_code == 422
-    assert "must vary across rows" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert detail["code"] == "CONSTANT_OUTCOME"
+    assert "single distinct value" in detail["message"]
 
 
 def test_random_mixed_dataset_happy_path():
